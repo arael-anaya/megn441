@@ -9,6 +9,5 @@ ros2_ws/src/sllidar_ros2
 moveit_ws
 ros2_ws/src/teleop
 ros2_ws/src/keyboard
-ros2_ws/src/rosbot
 ros2_ws/src/myslam
 *.zip
