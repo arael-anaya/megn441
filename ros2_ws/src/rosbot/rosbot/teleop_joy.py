@@ -1,10 +1,7 @@
 import rclpy
 from rclpy.node import Node
-from turtlesim.msg import Pose
-from geometry_msgs.msg import Twist , Point
+from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy
-
-import numpy as np
 
 
 class teleopJoy(Node):
