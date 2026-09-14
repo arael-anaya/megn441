@@ -1,6 +1,6 @@
 setopt no_nomatch
 
-source $HOME/ros2_ws/.robotrc 
+source $HOME/A7_ws/.robotrc 
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
