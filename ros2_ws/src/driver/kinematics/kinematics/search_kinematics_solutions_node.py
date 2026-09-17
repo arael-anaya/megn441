@@ -2,8 +2,8 @@
 # encoding: utf-8
 # @data:2023/03/20
 # @author:aiden
-# 实时获取角度反馈，根据当前位置和(Obtain real-time angle feedback based on the current position sum)
-# 目标位置的最小差值来获取最优解(Get optimal solution based on the minimum difference value between current position and target position)
+# Obtain real-time angle feedback based on the current position sum
+# Get optimal solution based on the minimum difference value between current position and target position
 import rclpy
 import numpy as np
 from rclpy.node import Node
@@ -17,10 +17,10 @@ from servo_controller_msgs.msg import ServoStateList
 from kinematics_msgs.msg import JointsRange, Link
 from kinematics_msgs.srv import SetRobotPose, SetJointValue, GetRobotPose, SetLink, GetLink, SetJointRange, GetJointRange
 
-fk = ForwardKinematics(debug=False)  # 不开启打印(unable printing)
+fk = ForwardKinematics(debug=False)  # disable printing
 class SearchKinematicsSolutionsNode(Node):
     def __init__(self, name):
-        # 初始化节点(initialize node)
+        # initialize node
         rclpy.init()
         super().__init__(name)
         self.name = name
@@ -48,7 +48,7 @@ class SearchKinematicsSolutionsNode(Node):
         return response
 
     def set_link_srv(self, request, response):
-        # 设置link长度(set link length)
+        # set link length
         base_link = request.data.base_link
         link1 = request.data.link1
         link2 = request.data.link2
@@ -61,7 +61,7 @@ class SearchKinematicsSolutionsNode(Node):
         return response
 
     def get_link_srv(self, request, response):
-        # 获取各个link长度(obtain the length of each link)
+        # obtain the length of each link
         data = get_link()
         data1 = fk.get_link()
         link = Link()
@@ -80,7 +80,7 @@ class SearchKinematicsSolutionsNode(Node):
         return response
 
     def set_joint_range_srv(self, request, response):
-        # 设置关节范围(set joint range)
+        # Set joint range
         joint1 = request.data.joint1
         joint2 = request.data.joint2
         joint3 = request.data.joint3
@@ -93,7 +93,7 @@ class SearchKinematicsSolutionsNode(Node):
         return response
 
     def get_joint_range_srv(self, request, response):
-        # 获取各个关节范围(obtain the range of each joint)
+        # Obtain the range of each joint
         data = get_joint_range('deg')
         data1 = fk.get_joint_range('deg')
         joint_range = JointsRange()
@@ -115,7 +115,7 @@ class SearchKinematicsSolutionsNode(Node):
         return response
 
     def set_joint_value_target_srv(self, request, response):
-        # 正运动学解(forward kinematics solution)
+        # Forward kinematics solution
         joint_value = request.joint_value
         angle = transform.pulse2angle(joint_value)
         res = fk.get_fk(angle)
@@ -133,7 +133,7 @@ class SearchKinematicsSolutionsNode(Node):
         return response
 
     def get_current_pose_srv(self, request, response):
-        # 获取机械臂当前位置(obtain the current position of the robotic arm)
+        # Obtain the current position of the robotic arms
         angle = transform.pulse2angle(self.current_servo_positions)
         res = fk.get_fk(angle)
         pose = Pose() 
@@ -150,7 +150,7 @@ class SearchKinematicsSolutionsNode(Node):
         return response
 
     def get_servo_position(self, msg):
-        # 获取舵机当前角度(obtain the current angle of the servo)
+        # Obtain the current angle of the servo
         servo_states = []
         for i in msg.servo_state:
             if 0 < i.id < 6:
@@ -159,7 +159,7 @@ class SearchKinematicsSolutionsNode(Node):
         # self.get_logger().info(str(self.current_servo_positions))
 
     def set_pose_target(self, position, pitch, pitch_range, resolution):
-        # 逆运动学解，获取最优解(所有电机转动最小)(use inverse kinematics to obtain the optimal solution (minimum rotation of all motors))
+        # Use inverse kinematics to obtain the optimal solution (minimum rotation of all motors)
         position = list(position)
 
         all_solutions = get_ik(position, pitch, list(pitch_range), resolution)

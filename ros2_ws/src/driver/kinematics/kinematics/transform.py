@@ -19,40 +19,34 @@ i | α(i-1) | a(i-1) |       θ(i)      | d(i) |
 ----------------------------------------------
 '''
 
-# 连杆长度(m)(length of each linkage (m))
-# 底座的高度，这里把第一个坐标系和第二个坐标的原点重合到一起了(The height of the base. Origin of the first coordinate system is aligned with that of the second one)
-machine_type = os.environ.get('MACHINE_TYPE')
-if machine_type == 'JetRover_Acker':
-    base_link = 0.05 + 0.0654868 + 0.0338648 + 0.0772047
-elif machine_type == 'JetRover_Mecanum':
-    base_link = 0.22736 
-elif machine_type == 'JetRover_Tank':
-    base_link = 0.127 + 0.0338648 + 0.0772047 
+# length of each linkage (m)
+# The height of the base. Origin of the first coordinate system is aligned with that of the second one
+base_link = 0.05 + 0.0654868 + 0.0338648 + 0.0772047
 
 link1 = 0.130
 link2 = 0.130
 
-# 计算tool_link时取值为link3 + tool_link，因为把末端的坐标系原点和前一个重合到一起了(When calculating tool_link, the value is link3 + tool_link, because the origin of the end effector coordinate system is aligned with the previous one)
-# 这里的tool_link指实际上的夹持器长度(tool_link refers to the actual length of the gripper)
+# When calculating tool_link, the value is link3 + tool_link, because the origin of the end effector coordinate system is aligned with the previous one
+# tool_link refers to the actual length of the gripper
 link3 = 0.055
 tool_link = 0.117
 
-# 各关节角度限制，取决于是否碰撞以及舵机的转动范围(Joint angle limits, depending on whether there is collision and the range of servo rotation)
-# 多加0.2为了防止计算时数值的不稳定，会比设定值大一点点(Add 0.2 to prevent numerical instability during calculation, which will be slightly larger than the set value)
+# Joint angle limits, depending on whether there is collision and the range of servo rotation
+# Add 0.2 to prevent numerical instability during calculation, which will be slightly larger than the set value
 joint1 = [-120.2, 120.2]
 joint2 = [-180.2, 0.2]
 joint3 = [-120.2, 120.2]
 joint4 = [-200.2, 20.2]
 joint5 = [-120.2, 120.2]
 
-#         舵机脉宽范围，中位值，对应的角度范围，中位值(Servo pulse width range, neutral position value, corresponding angle range, and neutral position value)
+#         Servo pulse width range, neutral position value, corresponding angle range, and neutral position value
 joint1_map = [0, 1000, 500, -120, 120, 0]
 joint2_map = [0, 1000, 500, 30, -210, -90]
 joint3_map = [0, 1000, 500, 120, -120, 0]
 joint4_map = [0, 1000, 500, 30, -210, -90]
 joint5_map = [0, 1000, 500, -120, 120, 0]
 
-# 判断是否为旋转矩阵(Determine whether it is a rotation matrix)
+# Determine whether it is a rotation matrix
 def isRotationMatrix(r):
     rt = np.transpose(r)
     shouldBeIdentity = np.dot(rt, r)
@@ -61,7 +55,7 @@ def isRotationMatrix(r):
     return n < 1e-6
 
 
-# 旋转矩阵--->欧拉角(rotation matrix--->Euler angles)
+# otation matrix--->Euler angles
 def rot2rpy(R):
     assert (isRotationMatrix(R))
 
@@ -113,7 +107,7 @@ def qua2rpy(qua):
   
     return degrees(roll), degrees(pitch), degrees(yaw)
 
-# 等比例映射(proportional mapping)
+# proportional mapping
 def angle_transform(angle, param, inverse=False):
     if inverse:
         new_angle = ((angle - param[5]) / (param[4] - param[3])) * (param[1] - param[0]) + param[2]

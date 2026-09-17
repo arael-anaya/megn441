@@ -8,8 +8,8 @@ import math
 class JointPositionController():
     def __init__(self, joint_config, joint_name):
         # super().__init__(joint_name)
-        self.RADIANS_PER_ENCODER_TICK = 240 / 360 * (math.pi * 2) / 1000  # 脉宽--->弧度(pulse width--->radian)
-        self.ENCODER_TICKS_PER_RADIAN = 1 / self.RADIANS_PER_ENCODER_TICK # 弧度-->脉宽(radian-->pulse width)
+        self.RADIANS_PER_ENCODER_TICK = 240 / 360 * (math.pi * 2) / 1000  # pulse width--->radian
+        self.ENCODER_TICKS_PER_RADIAN = 1 / self.RADIANS_PER_ENCODER_TICK # radian-->pulse width
         self.ENCODER_RESOLUTION = 1000
         self.MAX_POSITION = self.ENCODER_RESOLUTION - 1
         self.VELOCITY_PER_TICK = 10
@@ -40,14 +40,14 @@ class JointPositionController():
     def pulse_to_rad(self, raw, initial_position_raw, flipped, radians_per_encoder_tick):
         return (initial_position_raw - raw if flipped else raw - initial_position_raw) * radians_per_encoder_tick
 
-    def pos_rad_to_pulse(self, pos_rad):  #弧度--->脉宽(radian-->pulse width)
+    def pos_rad_to_pulse(self, pos_rad):  # radian-->pulse width
         if pos_rad < self.min_angle:
             pos_rad = self.min_angle
         elif pos_rad > self.max_angle:
             pos_rad = self.max_angle
         return self.rad_to_pulse(pos_rad, self.initial_position_raw, self.flipped, self.ENCODER_TICKS_PER_RADIAN)
 
-    def pos_pulse_to_rad(self, pos_pulse):  #脉宽--->弧度(pulse width--->radian)
+    def pos_pulse_to_rad(self, pos_pulse):  # pulse width--->radian
         if pos_pulse < self.min_pulse:
             pos_pulse = self.min_pulse
         elif pos_pulse > self.max_pulse:
