@@ -2,15 +2,15 @@
 # coding=utf8
 import Jetson.GPIO as GPIO
 
-LED_PIN = 24  # LED对应引脚号 (pin number corresponding to LED)
+LED_PIN = 24  # pin number corresponding to LED
 
 mode = GPIO.getmode()
-if mode == 1 or mode is None:  # 是否已经设置引脚编码(whether the pin code is set)
-    GPIO.setmode(GPIO.BCM)  # 设为BCM编码(set as BCM code)
+if mode == 1 or mode is None:  # whether the pin code is set
+    GPIO.setmode(GPIO.BCM)  # set as BCM code
 
-GPIO.setwarnings(False)  # 关闭警告打印(close alarm print)
+GPIO.setwarnings(False)  # close alarm print
 
-GPIO.setup(LED_PIN, GPIO.OUT)  # 设置引脚为输出模式(set pin as output mode)
+GPIO.setup(LED_PIN, GPIO.OUT)  # set pin as output mode
 
 def on():
     GPIO.output(LED_PIN, 0)

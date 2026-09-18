@@ -56,9 +56,9 @@ class JointTrajectoryActionController(Node):
     def follow_trajectory_callback(self, goal_handle):
         goal = goal_handle.request
         traj = goal.trajectory
-        num_points = len(traj.points)  # 计算总的轨迹点数(calculate the total number of trajectory points)
+        num_points = len(traj.points)  # calculate the total number of trajectory points
 
-        if num_points == 0:  # 如果没有轨迹点则立刻返回(return immediately if there are no trajectory points)
+        if num_points == 0:  # return immediately if there are no trajectory points
             msg = 'Incoming trajectory is empty'
             self.get_logger().error(msg)
             goal_handle.abort()
@@ -66,17 +66,17 @@ class JointTrajectoryActionController(Node):
 
         lookup = []
         for joint in self.joint_names:
-            lookup.append(traj.joint_names.index(joint))  # 将joint的顺序转为数字索引(convert the order of joints to numerical indices)
+            lookup.append(traj.joint_names.index(joint))  # convert the order of joints to numerical indices
         durations = [0.0] * num_points
 
         # find out the duration of each segment in the trajectory
-        durations[0] = traj.points[0].time_from_start.sec  # 第一个点的时间戳(the timestamp of the first point)
+        durations[0] = traj.points[0].time_from_start.sec  # the timestamp of the first point
 
         for i in range(1, num_points):
-            # 下一个减去上一个的时间戳算出来就是这个轨迹运行需要的时间(subtracting the timestamp of the previous point from the timestamp of the next point yields the time required for the trajectory to execute)
+            # subtracting the timestamp of the previous point from the timestamp of the next point yields the time required for the trajectory to execute
             durations[i] = (traj.points[i].time_from_start - traj.points[i - 1].time_from_start).sec
 
-        if not traj.points[0].positions:  # 如果为空(if it is none)
+        if not traj.points[0].positions:  # if it is none
             res = FollowJointTrajectoryResult()
             res.error_code = FollowJointTrajectoryResult.INVALID_GOAL
             msg = 'First point of trajectory has no positions'
@@ -87,7 +87,7 @@ class JointTrajectoryActionController(Node):
         trajectory = []
         current_time = self.get_clock().now() + Duration(seconds=0.01)
 
-        for i in range(num_points):  # 遍历所有轨迹点，将他重新存储到列表里(iterate through all trajectory points and store them back into a list)
+        for i in range(num_points):  # iterate through all trajectory points and store them back into a list
             seg = Segment(self.num_joints)
 
             if traj.header.stamp == Time(0.0):
@@ -140,7 +140,7 @@ class JointTrajectoryActionController(Node):
                 self.servo_manager.set_position(id_, pos_, durations[seg])
 
             while current_time < seg_end_times[seg]:
-                # heck if new trajectory was received, if so abort current trajectory execution
+                # check if new trajectory was received, if so abort current trajectory execution
                 # by setting the goal to the current position c
                 if goal_handle.is_cancel_requested:
                     msg = 'New trajectory received. Exiting.'

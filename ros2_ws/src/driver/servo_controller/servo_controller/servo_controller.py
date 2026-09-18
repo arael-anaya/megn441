@@ -58,7 +58,7 @@ class ServoManager(Node):
         for i in position:
             position = int(i.position)
             position = 0 if position < 0 else 1000 if position > 1000 else position
-            self.servos[str(i.id)].position = position  # 记录发送的位置(record the sending location)
+            self.servos[str(i.id)].position = position  # record the sending location
             servo_msg = ServoPosition()
             servo_msg.id = i.id
             servo_msg.position = position

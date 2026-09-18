@@ -30,9 +30,9 @@ export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || pr
 
 source /opt/ros/humble/local_setup.zsh
 source $working_space/ros2_ws/install/local_setup.zsh
-source $working_space/third_party/third_party_ws/install/local_setup.zsh
-source $working_space/third_party/orbbec_ws/install/local_setup.zsh
-source $working_space/third_party/rtabmap_ws/install/local_setup.zsh
+# source $working_space/third_party/third_party_ws/install/local_setup.zsh
+# source $working_space/third_party/orbbec_ws/install/local_setup.zsh
+# source $working_space/third_party/rtabmap_ws/install/local_setup.zsh
 
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export PULSE_SERVER="unix:$XDG_RUNTIME_DIR/pulse/native"
