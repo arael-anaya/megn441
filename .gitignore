@@ -8,6 +8,7 @@ ros2_ws/src/sllidar_ros2
 demo_ws/build
 demo_ws/install
 demo_ws/log
+control_ws
 dev_ws
 test_ws
 .vscode
