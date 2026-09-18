@@ -1,0 +1,61 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="demo_bot">
+    <xacro:include filename="wheels.xacro" />
+
+    <!-- Base Link -->
+    <link name="base_link">
+        <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+            <!-- All dimensions in meters -->
+            <box size="0.2 0.24 0.06" />
+        </geometry>
+        <material name="blue"/>
+        </visual>
+        <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+            <!-- All dimensions in meters -->
+            <box size="0.2 0.24 0.06" />
+        </geometry>
+        </collision>
+        
+        <xacro:inertial_box mass="3" x="0.2" y="0.24" z="0.06">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_box>
+    </link>
+
+    <!-- Left Wheel -->
+    <xacro:wheel prefix="left" y="0.14" rpy="${pi/2} 0 0" axis="-1"/>
+    <!-- Right Wheel -->
+    <xacro:wheel prefix="right" y="-0.14" rpy="-${pi/2} 0 0" axis="1"/>
+
+    <!-- Fixed Caster -->
+    <joint name="caster_joint" type="fixed">
+        <origin xyz="0.06 0 -0.03"/>
+        <parent link="base_link"/>
+        <child link="caster"/>
+    </joint>
+
+    <link name="caster">
+        <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+            <!-- All dimensions in meters -->
+            <sphere radius="0.02" />
+        </geometry>
+        <material name="blue"/>
+        </visual>
+        <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+            <sphere radius="0.02" />
+        </geometry>
+        </collision>
+    </link>
+
+    <gazebo reference="caster">
+        <mu1 value="0"/>
+        <mu2 value="0"/>
+    </gazebo>
+</robot>

@@ -1,0 +1,42 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="demo_bot">
+
+<!-- Create a Macro for a Wheel -->
+<xacro:macro name="wheel" params="prefix y rpy axis">
+    
+    <!-- Wheel Joint -->
+    <joint name="${prefix}_wheel_joint" type="continuous">
+        <parent link="base_link"/>
+        <child link="${prefix}_wheel"/>
+        <origin xyz="-0.05 ${y} 0" rpy="${rpy}"/>
+        <axis xyz="0 0 ${axis}"/>
+        <limit effort="0.5" velocity="10.0"/>
+    </joint>
+
+    <!-- Wheel Link -->
+    <link name="${prefix}_wheel">
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <visual>
+            <geometry>
+                <cylinder length="0.03" radius="0.05" />
+            </geometry>
+            <material name="white"/>
+        </visual>
+        <collision>
+            <geometry>
+                <sphere radius="0.05"/>
+            </geometry>
+        </collision>
+        <xacro:inertial_cylinder mass="0.1" length="0.03" radius="0.05">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_cylinder>
+    </link>
+
+    <gazebo reference="${prefix}_wheel">
+        <mu1 value="0.7"/>
+        <mu2 value="0.5"/>
+    </gazebo>
+
+</xacro:macro>
+
+</robot>
