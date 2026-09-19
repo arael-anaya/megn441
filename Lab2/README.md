@@ -2,14 +2,14 @@
 
 ## Lab Overview
 
-By the end of this lab, you will be able to:
+Let's see the power of using off-the-shelf ROS packages to accomplish our goals. During week 1 of this lab, we will be getting our LiDAR and RGBD cameras working, and then visualizing the output using RViz. Then, during week 2, we will use slam_toolbox to map the hallways of Brown!
+
+By the end of this lab, you'll be able to:
 
 - Install off-the-shelf ROS2 packages
 - Build off-the-shelf ROS2 packages
 - Visualize sensors using RViz
 - Map a room using SLAM
-
-During week 1 of this lab, we will be getting our LiDAR and RGBD cameras working and then visualizing the output using RViz. And then, during week 2, we will use slam_toolbox to map the basement hallway of Brown!
 
 ### Lab Procedure
 
