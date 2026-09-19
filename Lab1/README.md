@@ -92,7 +92,7 @@ The guidelines below will be used in grading your lab report. Be sure to include
 - Report on how your controller driving node works.
 - Include a link to a video of piloting the bot with the controller.
 - Report on what is included in your launch file.
-- Include a .zip file of the package you wrote with your submission and describe where in the folder yoru launch file and joystick node can be found.
+- Include a .zip file of the package you wrote with your submission and describe where in the folder your launch file and joystick node can be found.
 
 #### 4. Conclusions
 
