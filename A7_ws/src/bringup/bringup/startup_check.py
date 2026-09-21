@@ -10,7 +10,7 @@ from ros_robot_controller_msgs.msg import BuzzerState, OLEDState
 
 ROBOT_NUMBER = 12
 
-# NAMESPACE = "jetrover"
+NAMESPACE = "ros_robot_controller"
 
 def get_cpu_serial_number():
     # device_serial_number = open("/proc/device-tree/serial-number")

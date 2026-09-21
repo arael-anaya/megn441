@@ -6,8 +6,16 @@ A7_ws/install
 A7_ws/log
 A7_ws/src/OrbbecSDK_ROS2
 A7_ws/src/sllidar_ros2
-moveit_ws
 A7_ws/src/teleop
 A7_ws/src/keyboard
 A7_ws/src/myslam
+ros2_ws/build
+ros2_ws/install
+ros2_ws/log
+demo_ws/build
+demo_ws/install
+demo_ws/log
+dev_ws
+test_ws
+moveit_ws
 *.zip
