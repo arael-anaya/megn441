@@ -6,7 +6,7 @@ import launch_ros.actions
 from launch.actions import IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 # ros2 run nav2_map_server map_saver_cli -f ~/basement_map
-
+#  rsync -ruvl A4_ws ubuntu@192.168.149.1:~/
 def generate_launch_description():
     rosbot_pkg_path = get_package_share_directory('rosbot')
     slam_params = os.path.join(rosbot_pkg_path, 'config/slam_params.yaml')
