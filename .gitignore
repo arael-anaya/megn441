@@ -1,10 +1,10 @@
 old_files
 jetrover_ws
-ros2_ws/build
-ros2_ws/install
-ros2_ws/log
-ros2_ws/src/OrbbecSDK_ROS2
-ros2_ws/src/sllidar_ros2
+A4_ws/build
+A4_ws/install
+A4_ws/log
+A4_ws/src/OrbbecSDK_ROS2
+A4_ws/src/sllidar_ros2
 demo_ws/build
 demo_ws/install
 demo_ws/log

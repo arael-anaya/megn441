@@ -28,9 +28,9 @@ def generate_launch_description():
         robot_controller_package_path = get_package_share_directory('ros_robot_controller')
         controller_package_path = get_package_share_directory('controller')
     else:
-        jetrover_description_package_path = '/home/ubuntu/ros2_ws/src/simulations/jetrover_description'
-        robot_controller_package_path = '/home/ubuntu/ros2_ws/src/driver/ros_robot_controller'
-        controller_package_path = '/home/ubuntu/ros2_ws/src/driver/controller'
+        jetrover_description_package_path = '/home/ubuntu/A4_ws/src/simulations/jetrover_description'
+        robot_controller_package_path = '/home/ubuntu/A4_ws/src/driver/ros_robot_controller'
+        controller_package_path = '/home/ubuntu/A4_ws/src/driver/controller'
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(jetrover_description_package_path, 'launch/robot_description.launch.py')
