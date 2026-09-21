@@ -55,8 +55,8 @@ def generate_launch_description():
         package = 'rviz2',
         executable = 'rviz2',
         name = 'rviz2',
-        output = 'screen'
-        # arguments = ['d', os.path.join(rosbot_pkg_path, 'config/sensors.rviz')]
+        output = 'screen',
+        arguments = ['-d', os.path.join(rosbot_pkg_path, 'config/sensors.rviz')]
 
     )
 
