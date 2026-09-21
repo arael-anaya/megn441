@@ -1,10 +1,77 @@
 Visualization Manager:
   Class: ""
-  Displays: []
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Enabled: true
+      Name: Grid
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Name: TF
+      Value: true
+    - Class: rviz_default_plugins/LaserScan
+      Enabled: true
+      Name: LaserScan (filtered)
+      Size (m): 0.05
+      Style: Flat Squares
+      Color: 255; 0; 0
+      Value: true
+      Topic:
+        Value: /scan
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/LaserScan
+      Enabled: false
+      Name: LaserScan (raw)
+      Size (m): 0.03
+      Style: Points
+      Color: 0; 255; 0
+      Value: false
+      Topic:
+        Value: /scan_raw
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Color Image
+      Value: true
+      Topic:
+        Value: /depth_cam/color/image_raw
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Depth Image
+      Value: true
+      Topic:
+        Value: /depth_cam/depth/image_raw
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/PointCloud2
+      Enabled: false
+      Name: Depth Points
+      Size (m): 0.01
+      Style: Points
+      Color Transformer: RGB8
+      Value: false
+      Topic:
+        Value: /depth_cam/depth/points
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: base_link
+    Fixed Frame: laser
     Frame Rate: 30
   Name: root
   Tools: []
@@ -13,4 +80,7 @@ Visualization Manager:
     Current:
       Class: rviz_default_plugins/Orbit
       Name: Current View
+      Distance: 6
+      Pitch: 1.0
+      Yaw: 3.14
     Saved: ~
