@@ -19,7 +19,8 @@ def generate_launch_description():
         executable='sllidar_node',
         name='lidar',
         parameters=[{
-            'serial_port': '/dev/ttyUSB0',
+            # 'serial_port': '/dev/ttyUSB0',
+            'serial_port': '/dev/ttyCH341USB0',
             'serial_baudrate': 115200,
             'frame_id': 'lidar_frame',
             'angle_compensate': True,

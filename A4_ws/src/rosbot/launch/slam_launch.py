@@ -22,11 +22,11 @@ def generate_launch_description():
             os.path.join(rosbot_pkg_path, 'launch', 'joyLaunch.py')),
     )
 
-    # No manual static_transform_publisher needed: the lidar scan now uses
-    # frame_id 'lidar_frame', which robot_state_publisher already publishes
-    # relative to base_footprint via the robot's URDF (brought up automatically
-    # by bringup.launch.py -> controller.launch.py -> odom_publisher.launch.py
-    # -> robot_description.launch.py).
+    teleop_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(rosbot_pkg_path, 'launch', 'keyboardLaunch.py')),
+    )
+
 
     slam_node = launch_ros.actions.Node(
         package='slam_toolbox',
@@ -39,6 +39,7 @@ def generate_launch_description():
     return launch.LaunchDescription([
         sensors_launch,
         joy_launch,
+        teleop_launch,
         TimerAction(period=5.0, actions=[slam_node]),
     ])
 
