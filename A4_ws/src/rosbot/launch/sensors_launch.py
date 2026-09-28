@@ -20,8 +20,8 @@ def generate_launch_description():
         name='lidar',
         parameters=[{
             'serial_port': '/dev/ttyUSB0',
-            'serial_baudrate': 115200,  
-            'frame_id': 'laser',
+            'serial_baudrate': 115200,
+            'frame_id': 'lidar_frame',
             'angle_compensate': True,
         }],
         # Don't edit the remapping.

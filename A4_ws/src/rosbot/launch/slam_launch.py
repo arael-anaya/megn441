@@ -22,19 +22,11 @@ def generate_launch_description():
             os.path.join(rosbot_pkg_path, 'launch', 'joyLaunch.py')),
     )
 
-    laser_tf_node = launch_ros.actions.Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='laser_static_tf',
-        # Offsets from the Hiwonder JetRover URDF (A4_ws/src/simulations/jetrover_description/urdf):
-        #   base_footprint -> base_link   z = 0.05 + 0.06549      (car_acker.urdf.xacro)
-        #   base_link      -> lidar_link  x = 0.09000, z = 0.04052 (lidar.urdf.xacro)
-        #   lidar_link     -> lidar_frame yaw = pi (A1 mounting)   (lidar_a1.urdf.xacro)
-        arguments=['--x', '0.09000', '--y', '0.0', '--z', '0.15601',
-                   '--yaw', '3.14159', '--pitch', '0.0', '--roll', '0.0',
-                   '--frame-id', 'base_footprint', '--child-frame-id', 'laser'],
-    )
-
+    # No manual static_transform_publisher needed: the lidar scan now uses
+    # frame_id 'lidar_frame', which robot_state_publisher already publishes
+    # relative to base_footprint via the robot's URDF (brought up automatically
+    # by bringup.launch.py -> controller.launch.py -> odom_publisher.launch.py
+    # -> robot_description.launch.py).
 
     slam_node = launch_ros.actions.Node(
         package='slam_toolbox',
@@ -47,7 +39,6 @@ def generate_launch_description():
     return launch.LaunchDescription([
         sensors_launch,
         joy_launch,
-        laser_tf_node,
         TimerAction(period=5.0, actions=[slam_node]),
     ])
 

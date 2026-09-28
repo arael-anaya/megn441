@@ -1,14 +1,7 @@
-import os
-from ament_index_python.packages import get_package_share_directory
-
 import launch
 import launch_ros.actions
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
-    bringup_pkg_path = get_package_share_directory('bringup')
-
     teleop_twist_keyboard_node = launch_ros.actions.Node(
                 package='teleop_twist_keyboard',
                 executable='teleop_twist_keyboard',
@@ -16,15 +9,8 @@ def generate_launch_description():
                 prefix=['xterm -e'],
                 output='screen')
 
-
-    bringup_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(bringup_pkg_path, 'launch/bringup.launch.py')),
-    )
-
     return launch.LaunchDescription([
         teleop_twist_keyboard_node,
-        bringup_launch,
     ])
 
 

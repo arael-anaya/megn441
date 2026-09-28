@@ -9,6 +9,18 @@ Visualization Manager:
       Enabled: true
       Name: TF
       Value: true
+    - Class: rviz_default_plugins/RobotModel
+      Enabled: true
+      Name: RobotModel
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Visual Enabled: true
+      Value: true
     - Class: rviz_default_plugins/LaserScan
       Enabled: true
       Name: LaserScan (filtered)
@@ -35,9 +47,13 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-    - Class: rviz_default_plugins/Image
+    - Class: rviz_default_plugins/Camera
       Enabled: true
-      Name: Color Image
+      Name: Camera
+      Image Rendering: background and overlay
+      Overlay Alpha: 0.5
+      Transport Hint: raw
+      Zoom Factor: 1
       Value: true
       Topic:
         Value: /depth_cam/color/image_raw
@@ -45,10 +61,35 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-    - Class: rviz_default_plugins/Image
+    - Class: rviz_default_plugins/DepthCloud
       Enabled: true
-      Name: Depth Image
+      Name: DepthCloud
+      Style: Flat Squares
+      Color Transformer: RGB8
+      Queue Size: 5
+      Autocompute Intensity Bounds: true
+      Occlusion Compensation:
+        Enabled: false
+        Value: 30
+      Depth Map Topic: /depth_cam/depth/image_raw
+      Depth Map Transport Hint: raw
+      Color Image Topic: /depth_cam/color/image_raw
+      Color Transport Hint: raw
       Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Name: Color Image
+      Value: false
+      Topic:
+        Value: /depth_cam/color/image_raw
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Name: Depth Image
+      Value: false
       Topic:
         Value: /depth_cam/depth/image_raw
         Depth: 5
@@ -71,7 +112,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: laser
+    Fixed Frame: base_footprint
     Frame Rate: 30
   Name: root
   Tools: []
