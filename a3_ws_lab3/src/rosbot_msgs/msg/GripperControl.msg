@@ -1,0 +1,2 @@
+uint16 pulse
+float32 duration

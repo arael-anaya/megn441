@@ -2,6 +2,7 @@
 
 from ros_robot_controller.ros_robot_controller_sdk import Board
 import rclpy
+import sys
 import time
 
 # Utility function to quickly spin a node
@@ -24,17 +25,14 @@ def reliable_spin(node, pub, msg, max_time=2.0):
 # Pulse commands are in units of ms
 
 # List of joint (id, command) pairs
-targets = [(1, 500),
-           (2, 750), # KEEP JOINT 2 BETWEEN 125 AND 775
-           (3, 40),
-           (4, 350),
-           (5, 500),
-           (10, 350)] # Gripper joint. Keep below 650
+targets = [ (1, 500),
+            (2, 750), # KEEP JOINT 2 BETWEEN 125 AND 775
+            (3, 40),
+            (4, 350),
+            (5, 500),
+            (10, 350)] # Gripper joint. Keep below 650
 
 duration = 1.0 # Time to complete motion
-
-
-
 
 ## Stage 1: Direct: ##
 # Send commands directly to board for each
@@ -46,55 +44,68 @@ def direct():
     for i in [1, 2, 3, 4, 5, 10]:
         print(i, ":\t", board.bus_servo_read_position(i))
 
-
-
 ## Stage 2: Forward: ##
 # Send commands through your topic for each
 # joint id, using targets, duration above
 
-# TODO: Update to your ForwardMsg type
-from rosbot_msgs.msg import ForwardMsg
+
+from rosbot_msgs.msg import ForwardPose
 
 def forward():
     rclpy.init()
     node = rclpy.create_node('arm_test')
-    # TODO: Update ForwardMsg, 'forward_topic' with your type, topic
-    forward_pub = node.create_publisher(ForwardMsg, 'forward_topic', 10)
-    msg = ForwardMsg()
 
-    # TODO: Assign targets, duration to your ForwardMsg
+    forward_pub = node.create_publisher(ForwardPose, 'forward_topic', 10)
+    msg = ForwardPose()
+
+    for target in targets:
+        msg.ids.append(target[0])
+        msg.pulses.append(target[1])
+
+    msg.duration = duration
 
     reliable_spin(node, forward_pub, msg)
-
-
 
 ## Stage 3: Inverse ##
 # Send command sthrough your inverse topic for target
 # xyz, roll, and pitch
 
 # TODO: Update to your InverseMsg type
-from rosbot_msgs.msg import InverseMsg
+from rosbot_msgs.msg import TargetPose
 
 # End position of arm relative to base_link
 xyz = [0.18, 0.02, 0.32]
 roll = 0.0 # Relative roll rotation of gripper
-pitch = -30.0 # Relative pitch rotation of gripper
+pitch = -90.0 # Relative pitch rotation of gripper
 # Don't need yaw! It's a 5-DOF arm and yaw gets set based on xyz
 
 def inverse():
     rclpy.init()
     node = rclpy.create_node('arm_test')
     # TODO: Update InverseMsg, 'inverse_topic' with your type, topic
-    inverse_pub = node.create_publisher(InverseMsg, 'inverse_topic', 10)
-    msg = InverseMsg()
+    inverse_pub = node.create_publisher(TargetPose, 'inverse_topic', 10)
+    msg = TargetPose()
 
-    # TODO: Assign duration, xyz, roll, pitch to your InverseMsg
+
+    msg.x = xyz[0]
+    msg.y = xyz[1]
+    msg.z = xyz[2]
+
+    msg.roll = roll
+    msg.pitch = pitch
+
+    msg.duration = duration
+
+
 
     reliable_spin(node, inverse_pub, msg)
 
 
 
-def main(mode='direct'):
+def main(mode=None):
+    # Usage: ros2 run rosbot_arm arm_test <direct|forward|inverse>
+    if mode is None:
+        mode = sys.argv[1] if len(sys.argv) > 1 else 'direct'
     if mode == 'direct':
         direct()
     elif mode=='forward':
@@ -105,4 +116,4 @@ def main(mode='direct'):
         print('Mode options are direct, forward, or inverse')
 
 if __name__ == '__main__':
-    main('direct')
+    main()
