@@ -11,9 +11,7 @@ min_angles = [-120, -90, -120, -120, -120]
 max_angles = [120, 66, 120, 120, 120]
 
 
-
 # All joints operate in the range -120 to 120 with a pulse width range of 0 to 1000
-
 
 def angle_to_pulse(angle):
 
@@ -64,18 +62,6 @@ class IKNode(Node):
         goal.pulses = pulses
         goal.duration = msg.duration
         self.forwardPosePublisher.publish(goal)
-
-
-
-
-        
-
-
-
-
-
-
-
 
 def main():
     rclpy.init()

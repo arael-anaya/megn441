@@ -31,6 +31,8 @@ setup(
             'ik_node = rosbot_arm.ik_node:main',
             'arm_control = rosbot_arm.arm_control:main',
             'arm_test = rosbot_arm.arm_test:main'
+            'vision_node = rosbot_vision.visin_node:main'
+            'stacker_node = rosbot_arm.stacker_node:main'
         ],
     },
 )
