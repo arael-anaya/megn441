@@ -7,7 +7,7 @@ from rosbot_msgs.srv import GetAngles, DetectBlocks
 
 
 
-class stackerNode(Node):
+class StackerNode(Node):
     def __init__(self):
         super().__init__('stacker_node')
 
@@ -19,18 +19,12 @@ class stackerNode(Node):
         self.targetPosePublisher = self.create_publisher(TargetPose, "inverse_topic" , 10)
         self.gripperControlPublisher = self.create_publisher(GripperControl, "gripper_topic" , 10)
         self.getAngleSrv = self.create_client(GetAngles , 'get_angles')
-        
+            
 
-    def getAnglesCallback(self, request, response):
-        return
-
-    
-    def detectBlocksCallback(self, request, response):
-        return
 
 def main():
     rclpy.init()
-    stacker_node = stackerNode()
+    stacker_node = StackerNode()
     rclpy.spin(stacker_node)
     rclpy.shutdown()
 

@@ -1,0 +1,8 @@
+vision_node:
+  ros__parameters:
+    # camera frame -> arm base frame: translation in meters, rotation in degrees (Rz*Ry*Rx)
+    # PLACEHOLDER (identity): measure the camera mount and fill these in.
+    cam_translation: [0.0, 0.0, 0.0]
+    cam_rpy_deg: [0.0, 0.0, 0.0]
+    block_half_height: 0.0
+    min_area: 500

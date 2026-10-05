@@ -19,3 +19,6 @@ control_ws
 dev_ws
 .vscode
 *.zip
+
+__pycache__/
+*.pyc
