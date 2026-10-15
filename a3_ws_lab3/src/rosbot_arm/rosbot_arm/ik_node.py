@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import Bool
 
 from rosbot_msgs.msg import TargetPose , ForwardPose
 from rosbot_arm import inverseKinematics
@@ -34,6 +35,9 @@ class IKNode(Node):
         self.forwardPosePublisher = self.create_publisher(ForwardPose, "forward_topic" , 10)
 
 
+        # True/False for every request so the stacker knows whether the pose was actually sent
+        self.ikResultPublisher = self.create_publisher(Bool, "ik_result", 10)
+
         self.jointIds = [1, 2, 3, 4, 5]
 
     def solvePulses(self, msg):
@@ -55,6 +59,7 @@ class IKNode(Node):
             self.get_logger().warn(
                 f'Target ({msg.x:.3f}, {msg.y:.3f}, {msg.z:.3f}) pitch={msg.pitch} '
                 'is unreachable or outside joint limits. Not sending.')
+            self.ikResultPublisher.publish(Bool(data=False))
             return
 
         goal = ForwardPose()
@@ -62,6 +67,7 @@ class IKNode(Node):
         goal.pulses = pulses
         goal.duration = msg.duration
         self.forwardPosePublisher.publish(goal)
+        self.ikResultPublisher.publish(Bool(data=True))
 
 def main():
     rclpy.init()

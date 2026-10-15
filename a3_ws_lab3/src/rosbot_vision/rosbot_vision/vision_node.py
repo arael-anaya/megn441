@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
@@ -48,9 +49,10 @@ class VisionNode(Node):
         self.colorStamp = None
         self.depthStamp = None
 
-        self.colorSubscription = self.create_subscription(Image, colorTopic, self.colorCallback, 10)
-        self.depthSubscription = self.create_subscription(Image, depthTopic, self.depthCallback, 10)
-        self.cameraInfoSubscription = self.create_subscription(CameraInfo, cameraInfoTopic, self.cameraInfoCallback, 10)
+        # Best-effort QoS matches camera drivers that publish sensor data, and still connects to reliable ones
+        self.colorSubscription = self.create_subscription(Image, colorTopic, self.colorCallback, qos_profile_sensor_data)
+        self.depthSubscription = self.create_subscription(Image, depthTopic, self.depthCallback, qos_profile_sensor_data)
+        self.cameraInfoSubscription = self.create_subscription(CameraInfo, cameraInfoTopic, self.cameraInfoCallback, qos_profile_sensor_data)
 
         self.detectBlocksSrv = self.create_service(DetectBlocks, 'detect_blocks', self.detectBlocksCallback)
 
