@@ -1,8 +1,13 @@
 vision_node:
   ros__parameters:
     # camera frame -> arm base frame: translation in meters, rotation in degrees (Rz*Ry*Rx)
-    # PLACEHOLDER (identity): measure the camera mount and fill these in.
-    cam_translation: [0.0, 0.0, 0.0]
-    cam_rpy_deg: [0.0, 0.0, 0.0]
+    # From the jetrover URDF (base_link -> joint1 -> link2..link4 -> camera_connect_link ->
+    # depth_cam_link -> depth_cam_frame, which is an optical frame: x right, y down, z forward).
+    # Valid only for the arm's detection pose: joint1=0, gripper pointing straight down
+    # (IK target x=0.10, y=0, z=0.25, pitch=-90), camera looking straight down.
+    # If the detection pose changes, recompute these.
+    cam_translation: [0.175, 0.0, 0.241]
+    cam_rpy_deg: [180.0, 0.0, -90.0]
+    # Measure the blocks and set to half their height (depth reads the top face).
     block_half_height: 0.0
     min_area: 500
