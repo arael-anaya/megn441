@@ -49,7 +49,6 @@ class StackerNode(Node):
         self.timer = self.create_timer(0.1,self.tick)
 
 
-<<<<<<< HEAD
         self.declare_parameter('stack_x', 0.0)
         self.declare_parameter('stack_y', -0.20)
 
@@ -210,67 +209,6 @@ class StackerNode(Node):
             level += 1
 
         self.get_logger().info(f'Done. Stacked {level} block(s).')
-=======
-        self.detectBlocksSrv = self.create_client(DetectBlocks , 'detect_blocks')
-        
-        self.targetPosePublisher = self.create_publisher(TargetPose, "inverse_topic" , 10)
-        self.gripperControlPublisher = self.create_publisher(GripperControl, "gripper_topic" , 10)
-        self.getAngleSrv = self.create_client(GetAngles , 'get_angles')
-
-
-        def moveTo(x,y,z,duration):
-            msg = TargetPose()
-
-            msg.x = x
-            msg.y = y
-            msg.z = z
-            msg.duration = duration
-
-            return msg
-
-        def openGripper():
-            msg = GripperControl()
-            msg.pulse = OPENPULSE
-            msg.duration = GRIP_DURATION
-
-            msg.gripperControlPublisher.publish(msg)
-
-        def closeGripper():
-                msg = GripperControl()
-                msg.pulse = CLOSEPULSE
-                msg.duration = GRIP_DURATION
-    
-                msg.gripperControlPublisher.publish(msg)
-
-        def now():
-            return float(self.get_clock().now().nanoseconds / 1e9)
-
-        def sendPose(x, y, z, duration):
-            msg = TargetPose()
-            msg.x = x
-            msg.y = y
-            msg.z = z
-            msg.roll = ROLL
-            msg.pitch = PITCH
-            msg.duration = duration
-
-            self.targetPosePublisher(msg)
-            self.nextActionTime = now() + duration + SETTLE_TIME
-
-        def sendGripper(pulse):
-            msg = GripperControl()
-            msg.pulse
-            msg.duration = GRIP_DURATION
-            self.gripperControlPublisher(msg)
-            self.nextActionTime = now() + GRIP_DURATION + SETTLE_TIME
-
-        def setState(name):
-            self.state = name
-            self.get_logger().info(f'State updated:{name}')
-            
-
-            
->>>>>>> 334220e2042db14d0e558326983c0bc3fba84a62
 
 
 def main():
