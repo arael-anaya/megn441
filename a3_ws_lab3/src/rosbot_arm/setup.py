@@ -31,7 +31,10 @@ setup(
             'ik_node = rosbot_arm.ik_node:main',
             'arm_control = rosbot_arm.arm_control:main',
             'arm_test = rosbot_arm.arm_test:main',
-            'stacker_node = rosbot_arm.stacker_node:main'
+            'stacker_node = rosbot_arm.stacker_node:main',
+            'pick_node = rosbot_arm.pick_node:main',
+            'teleop_arm = rosbot_arm.teleop_arm:main',
+            'arm_state_publisher = rosbot_arm.arm_state_publisher:main',
         ],
     },
 )

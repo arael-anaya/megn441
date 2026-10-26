@@ -6,8 +6,19 @@ vision_node:
     # Valid only for the arm's detection pose: joint1=0, gripper pointing straight down
     # (IK target x=0.10, y=0, z=0.25, pitch=-90), camera looking straight down.
     # If the detection pose changes, recompute these.
-    cam_translation: [0.175, 0.0, 0.241]
+    # Look pose is joint-space (stacker look_pulses [500,775,125,225,500]): tip at (0.172, 0, 0.120),
+    # camera = tip + (0.075, 0, -0.009). Recompute if look_pulses changes.
+    cam_translation: [0.247, 0.0, 0.111]
     cam_rpy_deg: [180.0, 0.0, -90.0]
     # Measure the blocks and set to half their height (depth reads the top face).
-    block_half_height: 0.0
+    block_half_height: 0.0127
+    # Report every block at z = table_z + block_half_height (table height in the arm frame) instead of the TF z.
+    fixed_table_z: true
+    table_z: 0.0
+    # Raises every block's z (m) without moving the camera. Increase if the gripper drags on / pushes into the table.
+    grasp_z_offset: 0.015
+    # Use the table seen in the depth image for the camera tilt and height instead of TF
+    level_from_table: true
+    # Added to every block's arm-frame x / y (m). +x = farther from the robot; tune if picks land short or past.
+    xy_offset: [0.0, 0.0]
     min_area: 500

@@ -1,15 +1,11 @@
-<<<<<<< HEAD
 import math
 import time
 
 import rclpy
-=======
-   import rclpy
->>>>>>> 334220e2042db14d0e558326983c0bc3fba84a62
 from rclpy.node import Node
 
 from std_msgs.msg import Bool
-from rosbot_msgs.msg import TargetPose, GripperControl
+from rosbot_msgs.msg import TargetPose, GripperControl, ForwardPose
 from rosbot_msgs.srv import DetectBlocks
 
 # Bottom of the stack first
@@ -24,39 +20,16 @@ class StackerNode(Node):
     def __init__(self):
         super().__init__('stacker_node')
 
-        OPENPULSE = 1000
-        CLOSEPULSE = 0
-        GRIP_DURATION = 1.0
-
-        HOVER_Z = .1
-        GRASP_Z = .1
-        BLOCK_HEIGHT = .1
-        STACK_X = 1
-        STACK_Y = 1
-        STACK_BASE_Z = .1
-
-        PITCH = 10
-        ROLL = 10
-
-        MOVE_TIME = 2
-        SETTLE_TIME = .3
-
-        self.state = 'WAIT_SERVICES'
-        self.blocks = []
-        self.currentBlock = None
-        self.stackLevel = 0
-        self.nextActionTime = 0.0
-        self.timer = self.create_timer(0.1,self.tick)
-
-
         self.declare_parameter('stack_x', 0.0)
         self.declare_parameter('stack_y', -0.20)
 
         # Ground height of the stack in the arm frame. NaN = use the average height of the detected blocks.
         self.declare_parameter('stack_z', float('nan'))
-        self.declare_parameter('block_size', 0.025)
+        self.declare_parameter('block_size', 0.0254)
 
         self.declare_parameter('hover_height', 0.06)
+        # How far (m) to lower the release point of every block; increase if blocks are still dropped too high.
+        self.declare_parameter('place_lower', 0.0)
 
         self.declare_parameter('gripper_open', 300)
         self.declare_parameter('gripper_closed', 600)
@@ -66,21 +39,35 @@ class StackerNode(Node):
 
         self.declare_parameter('roll_sign', 1.0)
 
+        # Camera is on the arm: it must be at this pose (matches cam_translation in vision_params.yaml) to see the blocks
+        # (0.10, 0, 0.25) at pitch -90 is outside joint 4's range; this one is reachable
+        # Joint-space look pose for joints 1..5, as pulses (0 deg = straight up, pulse 500). Upper arm 66 deg above
+        # horizontal = servo 2 at -24 deg (400); servo 3 = -90 deg (125); servo 4 = -66 deg (225) keeps the gripper
+        # pointing down (elevation 66 - 90 - 66 = -90).
+        self.declare_parameter('look_pulses', [500, 400, 125, 225, 500])
+        self.declare_parameter('look_duration', 2.5)
+        self.declare_parameter('go_to_look_pose', True)
+
         self.stackX = self.get_parameter('stack_x').value
         self.stackY = self.get_parameter('stack_y').value
         self.stackZ = self.get_parameter('stack_z').value
         self.blockSize = self.get_parameter('block_size').value
         self.hover = self.get_parameter('hover_height').value
+        self.placeLower = self.get_parameter('place_lower').value
         self.gripperOpen = int(self.get_parameter('gripper_open').value)
         self.gripperClosed = int(self.get_parameter('gripper_closed').value)
         self.moveDuration = self.get_parameter('move_duration').value
         self.settleTime = self.get_parameter('settle_time').value
         self.rollSign = self.get_parameter('roll_sign').value
+        self.lookPulses = [int(p) for p in self.get_parameter('look_pulses').value]
+        self.lookDuration = float(self.get_parameter('look_duration').value)
+        self.goToLookPose = self.get_parameter('go_to_look_pose').value
 
         self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks')
 
         self.targetPosePublisher = self.create_publisher(TargetPose, 'inverse_topic', 10)
         self.gripperControlPublisher = self.create_publisher(GripperControl, 'gripper_topic', 10)
+        self.forwardPosePublisher = self.create_publisher(ForwardPose, 'forward_topic', 10)
 
         self.ikResult = None
         self.ikResultSubscription = self.create_subscription(Bool, 'ik_result', self.ikResultCallback, 10)
@@ -151,6 +138,14 @@ class StackerNode(Node):
 
         self.wait(self.moveDuration + self.settleTime)
 
+    def moveToLookPose(self):
+        msg = ForwardPose()
+        msg.ids = [1, 2, 3, 4, 5]
+        msg.pulses = self.lookPulses
+        msg.duration = self.lookDuration
+        self.forwardPosePublisher.publish(msg)
+        self.wait(self.lookDuration + self.settleTime)
+
     def rollFor(self, x, y, blockYawRad):
         """Joint 5 spins relative to the arm's current heading (set by joint 1), so subtract the heading.
         A square block looks the same every 90 degrees, so wrap into [-45, 45)."""
@@ -165,7 +160,7 @@ class StackerNode(Node):
         pickRoll = self.rollFor(bx, by, block.yaw)
 
         # Block centres sit half a block above the ground; stack on a fixed ground height, not this block's noisy z
-        placeZ = groundZ + level * self.blockSize
+        placeZ = groundZ + level * self.blockSize - self.placeLower
         placeRoll = 0.0
 
         self.get_logger().info(
@@ -186,6 +181,10 @@ class StackerNode(Node):
         if not self.waitForSubscribers():
             self.get_logger().error('ik_node / arm_control are not running (nobody on inverse_topic or gripper_topic).')
             return
+
+        if self.goToLookPose:
+            self.moveGripper(self.gripperOpen)
+            self.moveToLookPose()
 
         blocks = self.detectBlocks()
         if not blocks:

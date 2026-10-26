@@ -8,8 +8,6 @@ from rosbot_arm import inverseKinematics
 # Only joint 2 is limited to protect the screen
 min_pulses = [0, 125, 0, 0, 0]
 max_pulses = [1000, 775, 1000, 1000, 1000]
-min_angles = [-120, -90, -120, -120, -120]
-max_angles = [120, 66, 120, 120, 120]
 
 
 # All joints operate in the range -120 to 120 with a pulse width range of 0 to 1000
@@ -42,14 +40,20 @@ class IKNode(Node):
 
     def solvePulses(self, msg):
 
-        for upDownConstraint in (1, -1):
-            jointAngles = inverseKinematics.solveIK(msg.x, msg.y, msg.z, msg.roll, msg.pitch, upDownConstraint)
-            if jointAngles is None:
-                continue
+        # Straight down (-90) puts the wrist ~0.17 m above the tip, which leaves low targets beyond ~0.15 m
+        # out of reach. If the requested pitch fails, tilt the gripper toward horizontal until it fits.
+        pitches = [msg.pitch] + [p for p in range(-80, -29, 5) if p > msg.pitch]
+        for pitch in pitches:
+            for upDownConstraint in (1, -1):
+                jointAngles = inverseKinematics.solveIK(msg.x, msg.y, msg.z, msg.roll, pitch, upDownConstraint)
+                if jointAngles is None:
+                    continue
 
-            pulses = [int(round(angle_to_pulse(a))) for a in jointAngles]
-            if all(lo <= p <= hi for p, lo, hi in zip(pulses, min_pulses, max_pulses)):
-                return pulses
+                pulses = [int(round(angle_to_pulse(a))) for a in jointAngles]
+                if all(lo <= p <= hi for p, lo, hi in zip(pulses, min_pulses, max_pulses)):
+                    if pitch != msg.pitch:
+                        self.get_logger().info(f'Target needed pitch {pitch} instead of {msg.pitch}.')
+                    return pulses
         return None
 
     def targetPoseCallback(self, msg):

@@ -9,13 +9,23 @@ HSV_RANGES = {
 }
 
 
-def find_block(bgr, color, minArea = 500):
+def colorMask(bgr, color):
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
 
     mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
 
     for lower, upper in HSV_RANGES[color]:
         mask |= cv2.inRange(hsv, np.array(lower), np.array(upper))
+    return mask
+
+
+def maskPixels(bgr, color):
+    """Number of pixels matching the color range before any cleanup, for debugging."""
+    return int(np.count_nonzero(colorMask(bgr, color)))
+
+
+def find_block(bgr, color, minArea = 500):
+    mask = colorMask(bgr, color)
 
     # 5 by 5 square of ones
     kernel = np.ones((5,5), np.uint8)

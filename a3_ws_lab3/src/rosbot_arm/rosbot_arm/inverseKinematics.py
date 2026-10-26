@@ -46,6 +46,8 @@ def solveIK(x,y,z,roll,pitch, upDownConstraint):
     jointAngles[3] = pitch - jointAngles[2] - jointAngles[1]
     jointAngles[4] = roll
 
-    jointAngles = np.rad2deg(jointAngles)
+    jointAngles  = np.rad2deg(jointAngles)
+
+    jointAngles[1] = jointAngles[1] - 90
 
     return jointAngles
