@@ -1,4 +1,15 @@
+import math
+import threading
+import time
+from collections import deque
+
+import cv2
+import numpy as np
 import rclpy
+import rclpy.time
+import tf2_ros
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
@@ -8,15 +19,23 @@ from sensor_msgs.msg import Image, CameraInfo
 from rosbot_msgs.msg import BlockDetection
 from rosbot_msgs.srv import DetectBlocks
 
-from rosbot_vision.findBlock import find_block, HSV_RANGES, maskPixels
+from rosbot_vision.findBlock import HSV_RANGES, maskPixels
+from rosbot_vision.locateBlock import locate_block
+from rosbot_vision.depthUtils import (depth_to_meters, quat_to_matrix, rpy_to_matrix, fit_table_plane,
+                                      level_rotation)
 
-import math
 
-import numpy as np
-import rclpy.time
-import tf2_ros
+def stampSec(stamp):
+    return stamp.sec + stamp.nanosec * 1e-9
 
-from rosbot_vision.depthUtils import median_depth, deproject, camera_to_arm, quat_to_matrix, fit_table_plane, level_rotation
+
+def hsvFromParam(values):
+    """Flat [h, s, v, h, s, v, ...] list (lower, upper pairs) -> [((h, s, v), (h, s, v)), ...]."""
+    values = [int(v) for v in values]
+    if len(values) == 0 or len(values) % 6 != 0:
+        raise ValueError(f'HSV range list must be 6 numbers per range, got {len(values)}')
+    return [(tuple(values[i:i + 3]), tuple(values[i + 3:i + 6])) for i in range(0, len(values), 6)]
+
 
 class VisionNode(Node):
     def __init__(self):
@@ -26,15 +45,26 @@ class VisionNode(Node):
         self.declare_parameter('depth_topic', '/depth_cam/depth/image_raw')
         self.declare_parameter('camera_info_topic', '/depth_cam/color/camera_info')
 
+        # Used for 16UC1 depth images; 32FC1 depth is already in meters
         self.declare_parameter('depth_scale', 0.001)
-        self.declare_parameter('depth_patch_half', 3)
-        self.declare_parameter('min_area', 500)
+        # Smallest color blob considered, in pixels. Real size is checked in meters, so this only drops speckles.
+        self.declare_parameter('min_area', 150)
+        # Anything colored whose top is higher than this above the table (the gripper, the robot) is not a block
+        self.declare_parameter('max_block_height', 0.06)
+
+        # Each request looks at this many new frames and keeps a color seen in at least min_detections of them
+        # (0 = more than half). Results are the median over those frames.
+        self.declare_parameter('num_frames', 5)
+        self.declare_parameter('min_detections', 0)
+        self.declare_parameter('frame_timeout', 3.0)
+        # Color and depth frames further apart in time than this are not paired
+        self.declare_parameter('max_pair_gap', 0.1)
 
         self.declare_parameter('cam_translation', [0.0, 0.0, 0.0])
         self.declare_parameter('cam_rpy_deg', [0.0, 0.0, 0.0])
-        self.declare_parameter('block_half_height', 0.0)
-        # Blocks lie flat on the table, so their height is known. The TF camera height is unreliable (it put blocks
-        # ~0.6 m up), so report z = table_z + block_half_height instead of the measured z. Set False to use the TF z.
+        self.declare_parameter('block_half_height', 0.0127)
+        # Blocks lie flat on the table, so their height is known. Report z = table_z + block_half_height instead of
+        # the measured z. Set False to use the measured z.
         self.declare_parameter('fixed_table_z', True)
         self.declare_parameter('table_z', 0.0)
         # Raises the reported block z without moving the camera; increase if the gripper hits the table
@@ -42,7 +72,7 @@ class VisionNode(Node):
         # Replace the TF camera tilt and height with the ones measured from the table in the depth image
         self.declare_parameter('level_from_table', True)
         # Added to every block's x / y in the arm frame; tune if the gripper still lands short or past the blocks
-        self.declare_parameter('xy_offset', [0.5, 0.0])
+        self.declare_parameter('xy_offset', [0.0, 0.0])
 
         # Look the camera pose up in TF instead of using the fixed cam_translation / cam_rpy_deg
         self.declare_parameter('use_tf', True)
@@ -50,13 +80,21 @@ class VisionNode(Node):
         self.declare_parameter('target_frame', 'base_footprint')
         self.declare_parameter('arm_origin_xyz', [0.0251328, 0.0, 0.0])
 
+        for color, ranges in HSV_RANGES.items():
+            self.declare_parameter(f'hsv_{color}', [int(v) for pair in ranges for bound in pair for v in bound])
+
         colorTopic = self.get_parameter('color_topic').value
         depthTopic = self.get_parameter('depth_topic').value
         cameraInfoTopic = self.get_parameter('camera_info_topic').value
 
         self.depthScale = self.get_parameter('depth_scale').value
-        self.patchHalf = self.get_parameter('depth_patch_half').value
         self.minArea = self.get_parameter('min_area').value
+        self.maxBlockHeight = self.get_parameter('max_block_height').value
+        self.numFrames = max(1, int(self.get_parameter('num_frames').value))
+        minDetections = int(self.get_parameter('min_detections').value)
+        self.minDetections = minDetections if minDetections > 0 else self.numFrames // 2 + 1
+        self.frameTimeout = self.get_parameter('frame_timeout').value
+        self.maxPairGap = self.get_parameter('max_pair_gap').value
         self.camTranslation = self.get_parameter('cam_translation').value
         self.camRpyDeg = self.get_parameter('cam_rpy_deg').value
         self.blockHalfHeight = self.get_parameter('block_half_height').value
@@ -68,6 +106,7 @@ class VisionNode(Node):
         self.useTf = self.get_parameter('use_tf').value
         self.targetFrame = self.get_parameter('target_frame').value
         self.armOrigin = np.asarray(self.get_parameter('arm_origin_xyz').value, dtype=float)
+        self.hsvRanges = {color: hsvFromParam(self.get_parameter(f'hsv_{color}').value) for color in HSV_RANGES}
 
         self.tfBuffer = tf2_ros.Buffer()
         self.tfListener = tf2_ros.TransformListener(self.tfBuffer, self)
@@ -75,30 +114,43 @@ class VisionNode(Node):
 
         self.bridge = CvBridge()
 
-        self.colorImage = None     
-        self.depthImage = None      
+        # Recent frames as (arrival time, header stamp, image). The service runs on its own thread and waits for
+        # frames that arrive after the request, so it never uses an image taken while the arm was still moving.
+        self.lock = threading.Lock()
+        self.colorFrames = deque(maxlen=30)
+        self.depthFrames = deque(maxlen=30)
         self.cameraInfo = None
-        self.colorStamp = None
-        self.depthStamp = None
+
+        imageGroup = MutuallyExclusiveCallbackGroup()
+        serviceGroup = MutuallyExclusiveCallbackGroup()
 
         # Best-effort QoS matches camera drivers that publish sensor data, and still connects to reliable ones
-        self.colorSubscription = self.create_subscription(Image, colorTopic, self.colorCallback, qos_profile_sensor_data)
-        self.depthSubscription = self.create_subscription(Image, depthTopic, self.depthCallback, qos_profile_sensor_data)
-        self.cameraInfoSubscription = self.create_subscription(CameraInfo, cameraInfoTopic, self.cameraInfoCallback, qos_profile_sensor_data)
+        self.colorSubscription = self.create_subscription(
+            Image, colorTopic, self.colorCallback, qos_profile_sensor_data, callback_group=imageGroup)
+        self.depthSubscription = self.create_subscription(
+            Image, depthTopic, self.depthCallback, qos_profile_sensor_data, callback_group=imageGroup)
+        self.cameraInfoSubscription = self.create_subscription(
+            CameraInfo, cameraInfoTopic, self.cameraInfoCallback, qos_profile_sensor_data, callback_group=imageGroup)
 
-        self.detectBlocksSrv = self.create_service(DetectBlocks, 'detect_blocks', self.detectBlocksCallback)
+        self.detectBlocksSrv = self.create_service(
+            DetectBlocks, 'detect_blocks', self.detectBlocksCallback, callback_group=serviceGroup)
+
+        # Color image with what was found drawn on it; view with rqt_image_view
+        self.debugPublisher = self.create_publisher(Image, '~/debug_image', 1)
 
         self.get_logger().info(
             f'Subscribed to color={colorTopic}, depth={depthTopic}, camera_info={cameraInfoTopic}')
 
     def colorCallback(self, msg):
-        self.colorImage = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        self.colorStamp = msg.header.stamp
-        self.colorFrame = msg.header.frame_id
+        image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        with self.lock:
+            self.colorFrames.append((time.monotonic(), stampSec(msg.header.stamp), image))
+            self.colorFrame = msg.header.frame_id
 
     def depthCallback(self, msg):
-        self.depthImage = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-        self.depthStamp = msg.header.stamp
+        image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        with self.lock:
+            self.depthFrames.append((time.monotonic(), stampSec(msg.header.stamp), image))
 
     def cameraInfoCallback(self, msg):
         if self.cameraInfo is None:
@@ -107,125 +159,172 @@ class VisionNode(Node):
                 f'cx={msg.k[2]:.1f}, cy={msg.k[5]:.1f}')
         self.cameraInfo = msg
 
-    def haveAllInputs(self):
-        return (self.colorImage is not None and
-                self.depthImage is not None and
-                self.cameraInfo is not None)
+    def collectFrames(self, since):
+        """Up to num_frames (color, depth) pairs whose color frame arrived after `since`, oldest first."""
+        end = time.monotonic() + self.frameTimeout
+        while time.monotonic() < end:
+            with self.lock:
+                fresh = sum(1 for f in self.colorFrames if f[0] >= since)
+            if fresh >= self.numFrames:
+                break
+            time.sleep(0.02)
 
-    def checkAgainstDepthPlane(self, depth, rotation, translation, fx, fy, cx0, cy0):
-        """Compare the camera pose from TF with what the depth image says about the table."""
-        fit = fit_table_plane(depth, fx, fy, cx0, cy0, self.depthScale)
-        if fit is None:
+        with self.lock:
+            colors = [f for f in self.colorFrames if f[0] >= since][-self.numFrames:]
+            depths = list(self.depthFrames)
+            if not colors:
+                self.get_logger().warn(
+                    f'No new color frame in {self.frameTimeout:.1f} s; using the last one received.')
+                colors = list(self.colorFrames)[-1:]
+        if len(colors) < self.numFrames:
+            self.get_logger().warn(f'Only {len(colors)} of {self.numFrames} new frames arrived in time.')
+
+        pairs = []
+        for _, colorStamp, bgr in colors:
+            if not depths:
+                break
+            _, depthStamp, depth = min(depths, key=lambda d: abs(d[1] - colorStamp))
+            if abs(depthStamp - colorStamp) > self.maxPairGap:
+                continue
+            if depth.shape[:2] != bgr.shape[:2]:
+                self.get_logger().warn(
+                    f'Depth {depth.shape[:2]} and color {bgr.shape[:2]} sizes differ; '
+                    'depth must be registered to color (depth_registration:=true).')
+                continue
+            pairs.append((bgr, depth))
+        return pairs
+
+    def cameraPose(self):
+        """Camera optical frame -> arm frame as (rotation, translation), or None."""
+        if not self.useTf:
+            return rpy_to_matrix(self.camRpyDeg), np.asarray(self.camTranslation, dtype=float)
+        try:
+            tf = self.tfBuffer.lookup_transform(self.targetFrame, self.colorFrame, rclpy.time.Time())
+        except tf2_ros.TransformException as e:
+            self.get_logger().error(
+                f'No TF {self.targetFrame} <- {self.colorFrame}: {e}. '
+                'Is robot_state_publisher / arm_state_publisher running?')
             return None
+        q = tf.transform.rotation
+        t = tf.transform.translation
+        rotation = quat_to_matrix(q.x, q.y, q.z, q.w)
+        translation = np.array([t.x, t.y, t.z]) - self.armOrigin
+        self.get_logger().info(
+            f'TF {self.targetFrame} <- {self.colorFrame}: camera at '
+            f'({translation[0]:.3f}, {translation[1]:.3f}, {translation[2]:.3f}) m, '
+            f'optical z axis (viewing direction) in arm frame = '
+            f'({rotation[0, 2]:.2f}, {rotation[1, 2]:.2f}, {rotation[2, 2]:.2f}) [looking straight down = (0, 0, -1)]')
+        return rotation, translation
+
+    def checkAgainstTf(self, fit, rotation, translation):
+        """Compare the camera pose from TF with what the depth image says about the table."""
         height, tilt, fraction, _ = fit
-        axisZ = rotation[2, 2]
-        tfTilt = math.degrees(math.asin(max(-1.0, min(1.0, -axisZ))))
-        self.get_logger().info(
-            f'Depth-plane check ({fraction * 100:.0f}% of points on the plane): '
-            f'camera is {height:.3f} m from the table, optical axis {tilt:.0f} deg from table-parallel. '
-            f'TF says camera z={translation[2]:.3f} m, axis {tfTilt:.0f} deg below horizontal. '
-            f'These should match (table at z=0) if the arm pose in TF is right.')
-        return fit
-
-    def detectBlocksCallback(self, request, response):
-        if not self.haveAllInputs():
-            self.get_logger().warn('detect_blocks called before color, depth and camera_info were received.')
-            return response
-        
-        bgr = self.colorImage.copy()
-        depth = self.depthImage.copy()
-
-        if depth.shape[:2] != bgr.shape[:2]:
+        tfTilt = math.degrees(math.asin(max(-1.0, min(1.0, -rotation[2, 2]))))
+        tfHeight = translation[2] - self.tableZ
+        message = (f'Depth-plane check ({fraction * 100:.0f}% of points on the plane): '
+                   f'camera is {height:.3f} m from the table, optical axis {tilt:.0f} deg below horizontal. '
+                   f'TF says {tfHeight:.3f} m, {tfTilt:.0f} deg.')
+        if abs(tilt - tfTilt) > 8.0 or abs(height - tfHeight) > 0.03:
             self.get_logger().warn(
-                f'Depth {depth.shape[:2]} and color {bgr.shape[:2]} sizes differ; '
-                'depth must be registered to color.')
-            return response
+                message + ' These disagree, so the arm pose in TF is off and the camera x / y from TF probably is '
+                'too. Picks will land short / long by a constant amount; measure it and set xy_offset.')
+        else:
+            self.get_logger().info(message)
 
-        rotation, translation = None, None
-        if self.useTf:
-            try:
-                tf = self.tfBuffer.lookup_transform(
-                    self.targetFrame, self.colorFrame, rclpy.time.Time())
-            except tf2_ros.TransformException as e:
-                self.get_logger().error(
-                    f'No TF {self.targetFrame} <- {self.colorFrame}: {e}. '
-                    'Is robot_state_publisher / arm_state_publisher running?')
-                return response
-            q = tf.transform.rotation
-            t = tf.transform.translation
-            rotation = quat_to_matrix(q.x, q.y, q.z, q.w)
-            translation = np.array([t.x, t.y, t.z]) - self.armOrigin
-            self.get_logger().info(
-                f'TF {self.targetFrame} <- {self.colorFrame}: camera at '
-                f'({translation[0]:.3f}, {translation[1]:.3f}, {translation[2]:.3f}) m, '
-                f'optical z axis (viewing direction) in arm frame = '
-                f'({rotation[0, 2]:.2f}, {rotation[1, 2]:.2f}, {rotation[2, 2]:.2f}) [looking straight down = (0, 0, -1)]')
+    def detectFrame(self, bgr, depth, pose, intrinsics, logPlane):
+        """Every color found in one frame as {color: detection dict}, plus the debug image."""
+        rotation, translation = pose
+        fx, fy, cx, cy = intrinsics
+        depthM = depth_to_meters(depth, self.depthScale)
 
-        fx = self.cameraInfo.k[0]
-        cx0 = self.cameraInfo.k[2]
-        fy = self.cameraInfo.k[4]
-        cy0 = self.cameraInfo.k[5]
-
-
-        self.get_logger().info(
-            f'detect_blocks: color {bgr.shape}, depth {depth.shape} {depth.dtype}, '
-            f'depth range {depth.min()}..{depth.max()}')
-
-        if rotation is not None:
-            fit = self.checkAgainstDepthPlane(depth, rotation, translation, fx, fy, cx0, cy0)
-            if self.levelFromTable and fit is not None:
-                height, _, _, normal = fit
+        plane = None
+        fit = fit_table_plane(depthM, fx, fy, cx, cy, 1.0)
+        if fit is None:
+            self.get_logger().warn('Could not find the table in the depth image; positions will be less accurate.')
+        else:
+            height, _, _, normal = fit
+            plane = (normal, height)
+            if logPlane:
+                self.checkAgainstTf(fit, rotation, translation)
+            if self.levelFromTable:
                 rotation = level_rotation(rotation, normal)
                 translation = np.array([translation[0], translation[1], self.tableZ + height])
-                self.get_logger().info(
-                    f'Leveled camera from the table: z={translation[2]:.3f} m, optical z axis in arm frame = '
-                    f'({rotation[0, 2]:.2f}, {rotation[1, 2]:.2f}, {rotation[2, 2]:.2f})')
 
+        found = {}
+        debug = bgr.copy()
         for color in HSV_RANGES:
-            result = find_block(bgr, color, self.minArea)
-            if result is None:
+            reasons = []
+            det = locate_block(bgr, depthM, color, intrinsics, plane, rotation, translation,
+                               2 * self.blockHalfHeight, self.minArea, self.maxBlockHeight,
+                               self.hsvRanges[color], reasons)
+            if det is None:
+                if logPlane:
+                    self.get_logger().info(
+                        f'{color}: not found ({maskPixels(bgr, color, self.hsvRanges[color])} px match the color; '
+                        f'{"; ".join(reasons)})')
+                continue
+            found[color] = det
+            u, v = det['pixel']
+            cv2.circle(debug, (int(u), int(v)), 6, (255, 255, 255), 2)
+            cv2.putText(debug, f'{color} ({det["x"]:.3f}, {det["y"]:.3f})', (int(u) + 8, int(v) - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        return found, debug
+
+    def detectBlocksCallback(self, request, response):
+        requested = time.monotonic()
+        if self.cameraInfo is None or self.colorFrame is None:
+            self.get_logger().warn('detect_blocks called before color, depth and camera_info were received.')
+            return response
+
+        pose = self.cameraPose()
+        if pose is None:
+            return response
+
+        pairs = self.collectFrames(requested)
+        if not pairs:
+            self.get_logger().warn('No color / depth frame pairs to look at.')
+            return response
+
+        k = self.cameraInfo.k
+        intrinsics = (k[0], k[4], k[2], k[5])
+
+        perColor = {color: [] for color in HSV_RANGES}
+        for i, (bgr, depth) in enumerate(pairs):
+            found, debug = self.detectFrame(bgr, depth, pose, intrinsics, logPlane=(i == 0))
+            for color, det in found.items():
+                perColor[color].append(det)
+        self.debugPublisher.publish(self.bridge.cv2_to_imgmsg(debug, encoding='bgr8'))
+
+        need = min(self.minDetections, len(pairs))
+        for color, dets in perColor.items():
+            if len(dets) < need:
                 self.get_logger().warn(
-                    f'{color}: no blob >= {self.minArea} px ({maskPixels(bgr, color)} matching px). '
-                    'Check the arm is at the look pose and the HSV ranges in findBlock.py.')
+                    f'{color}: seen in {len(dets)} of {len(pairs)} frames (need {need}); not reporting it.')
                 continue
 
-            u, v, yawDeg = result
-
-            raw = median_depth(depth, u, v, self.patchHalf)
-
-            if raw is None:
-                self.get_logger().warn(f'{color}: no valid depth near pixel ({u:.0f},{v:.0f}); skipping.')
-                continue
-
-            z = raw * self.depthScale
-            camXyz = deproject(u, v, z, fx, fy, cx0, cy0)
-            if rotation is not None:
-                x, y, z = rotation @ np.asarray(camXyz, dtype=float) + translation
-                # Rotate the block's in-image edge direction into the arm frame so yaw is relative to the arm axes
-                imgAngle = math.radians(yawDeg)
-                edge = rotation @ np.array([math.cos(imgAngle), math.sin(imgAngle), 0.0])
-                yawDeg = math.degrees(math.atan2(edge[1], edge[0]))
-                yawDeg = ((yawDeg + 45.0) % 90.0) - 45.0
-            else:
-                x, y, z = camera_to_arm(camXyz, self.camTranslation, self.camRpyDeg)
-            x += self.xyOffset[0]
-            y += self.xyOffset[1]
-            measuredZ = z - self.blockHalfHeight
+            x = float(np.median([d['x'] for d in dets])) + self.xyOffset[0]
+            y = float(np.median([d['y'] for d in dets])) + self.xyOffset[1]
+            measuredZ = float(np.median([d['z'] for d in dets]))
             z = (self.tableZ + self.blockHalfHeight if self.fixedTableZ else measuredZ) + self.graspZOffset
+            # Yaw repeats every 90 deg, so average on a circle of 4 * yaw
+            angles = np.radians([4 * d['yaw_deg'] for d in dets])
+            yawDeg = math.degrees(math.atan2(np.sin(angles).mean(), np.cos(angles).mean())) / 4
 
             det = BlockDetection()
-
             det.color = color
-            det.x = float(x)
-            det.y = float(y)
+            det.x = x
+            det.y = y
             det.z = float(z)
             det.yaw = math.radians(yawDeg)
-
             response.blocks.append(det)
 
+            spread = 1000 * max(np.ptp([d['x'] for d in dets]), np.ptp([d['y'] for d in dets]))
+            sizes = dets[-1]['size']
             self.get_logger().info(
-                f'{color}: pixel=({u:.1f},{v:.1f}) cam=({camXyz[0]:.3f},{camXyz[1]:.3f},{camXyz[2]:.3f}) arm=({x:.3f},{y:.3f},{z:.3f}) m (measured z={measuredZ:.3f}) yaw={yawDeg:.1f} deg')
-
+                f'{color}: arm=({x:.3f}, {y:.3f}, {z:.3f}) m (measured centre z={measuredZ:.3f}) '
+                f'yaw={yawDeg:.1f} deg, seen in {len(dets)}/{len(pairs)} frames, spread {spread:.0f} mm, '
+                f'top face {1000 * sizes[0]:.0f}x{1000 * sizes[1]:.0f} mm, pixel={dets[-1]["pixel"][0]:.0f},'
+                f'{dets[-1]["pixel"][1]:.0f}')
 
         return response
 
@@ -233,7 +332,14 @@ class VisionNode(Node):
 def main():
     rclpy.init()
     vision_node = VisionNode()
-    rclpy.spin(vision_node)
+    # Images keep arriving on one thread while detect_blocks waits for fresh ones on another
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(vision_node)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    vision_node.destroy_node()
     rclpy.shutdown()
 
 if __name__ == '__main__':

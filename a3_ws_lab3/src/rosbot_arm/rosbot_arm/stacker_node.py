@@ -47,6 +47,9 @@ class StackerNode(Node):
         self.declare_parameter('look_pulses', [500, 400, 125, 225, 500])
         self.declare_parameter('look_duration', 2.5)
         self.declare_parameter('go_to_look_pose', True)
+        # Go back to the look pose and find each block again right before picking it, in case it was bumped
+        self.declare_parameter('redetect_each_pick', True)
+        self.declare_parameter('detect_attempts', 10)
 
         self.stackX = self.get_parameter('stack_x').value
         self.stackY = self.get_parameter('stack_y').value
@@ -62,6 +65,8 @@ class StackerNode(Node):
         self.lookPulses = [int(p) for p in self.get_parameter('look_pulses').value]
         self.lookDuration = float(self.get_parameter('look_duration').value)
         self.goToLookPose = self.get_parameter('go_to_look_pose').value
+        self.redetectEachPick = self.get_parameter('redetect_each_pick').value
+        self.detectAttempts = max(1, int(self.get_parameter('detect_attempts').value))
 
         self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks')
 
@@ -91,23 +96,28 @@ class StackerNode(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
         return False
 
-    def detectBlocks(self):
-        """Ask the vision node for blocks. Returns {color: BlockDetection}."""
+    def detectBlocks(self, wanted):
+        """Ask the vision node for blocks until every color in `wanted` is seen or the attempts run out.
+        Returns {color: BlockDetection}, possibly missing some colors."""
         while not self.detectBlocksSrv.wait_for_service(timeout_sec=1.0):
             if not rclpy.ok():
                 return {}
             self.get_logger().info('Waiting for detect_blocks service...')
 
-        for attempt in range(10):
+        blocks = {}
+        for attempt in range(self.detectAttempts):
             future = self.detectBlocksSrv.call_async(DetectBlocks.Request())
             rclpy.spin_until_future_complete(self, future)
             result = future.result()
-            blocks = {b.color: b for b in result.blocks} if result is not None else {}
-            if blocks:
+            if result is not None:
+                blocks.update({b.color: b for b in result.blocks if b.color in wanted})
+            missing = [c for c in wanted if c not in blocks]
+            if not missing:
                 return blocks
-            self.get_logger().warn(f'No blocks detected (attempt {attempt + 1}/10), retrying...')
-            self.wait(1.0)
-        return {}
+            self.get_logger().warn(
+                f'Not seen yet: {missing} (attempt {attempt + 1}/{self.detectAttempts}), retrying...')
+            self.wait(0.5)
+        return blocks
 
     def moveGripper(self, pulse):
         msg = GripperControl()
@@ -186,7 +196,7 @@ class StackerNode(Node):
             self.moveGripper(self.gripperOpen)
             self.moveToLookPose()
 
-        blocks = self.detectBlocks()
+        blocks = self.detectBlocks(STACK_ORDER)
         if not blocks:
             self.get_logger().error('No blocks found. Nothing to stack.')
             return
@@ -196,7 +206,14 @@ class StackerNode(Node):
             groundZ = sum(b.z for b in blocks.values()) / len(blocks)
 
         level = 0
-        for color in STACK_ORDER:
+        for i, color in enumerate(STACK_ORDER):
+            if self.redetectEachPick and i > 0 and self.goToLookPose:
+                self.moveToLookPose()
+                fresh = self.detectBlocks([color])
+                if color in fresh:
+                    blocks[color] = fresh[color]
+                elif color in blocks:
+                    self.get_logger().warn(f'{color} not seen again; using where it was first seen.')
             if color not in blocks:
                 self.get_logger().warn(f'{color} block not detected, skipping it.')
                 continue
