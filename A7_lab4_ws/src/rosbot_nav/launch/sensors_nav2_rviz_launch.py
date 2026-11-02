@@ -51,6 +51,8 @@ def generate_launch_description():
             'map': map_yaml,
             'params_file': params_file,
             'use_sim_time': use_sim_time,
+            # The camera launch leaks log_level='none' into this scope; override it.
+            'log_level': 'info',
         }.items(),
     )
 
