@@ -20,7 +20,7 @@ By the end of this lab, you'll be able to:
 
    **Prepare your team**: Talk through how collaboration will work on this lab. You've worked on two labs to this point. What worked well for collaboration in the past? What didn't work well? How will you share files? How will you divide tasks? If you need to come in outside of lab hours, what days/times work well?
 
-1. **Use nav2 as a black box**: Using the `Robo_Lab` map that is included in this folder, test your robot in nav2! I have already cloned the correct version of `nav2_bringup` from [the navigation2 github](https://github.com/ros-navigation/navigation2/tree/main/nav2_bringup) for you into `lab4_ws/src/rosbot_nav` and added the map of the basement to maps. I haven't changed anything else here. Colcon build this package on the bot.
+1. **Use nav2 as a black box**: Using the `Robo_Lab` map that is included in this folder, test your robot in nav2! I have already cloned the correct version of `nav2_bringup` from [the navigation2 github](https://github.com/ros-navigation/navigation2/tree/main/nav2_bringup) for you into `A7_lab4_ws/src/rosbot_nav` and added the map of the basement to maps. I haven't changed anything else here. Colcon build this package on the bot.
 
    You'll need three browser tabs to launch everything. First, launch your sensors_launch.py from Lab2. Then, launch nav2 using:
 
@@ -43,7 +43,7 @@ By the end of this lab, you'll be able to:
 
 3. **Begin your delivery manager node**: By the end of week 3, this delivery manager node will handle pick and place operations along with autonomously calling the navigation servers. For now, we will get it started by creating an Action Client for the `navigate_to_pose` nav2 action ([API](https://api.nav2.org/actions/humble/navigatetopose.html)).
 
-   A nice way to handle a manager node is with a Finite State Machine and a ROS2 timer. This approach will prevent your code from blocking other ROS interfaces. I have provided a starting template in the provided `lab4_ws/src/nav_manager` package.
+   A nice way to handle a manager node is with a Finite State Machine and a ROS2 timer. This approach will prevent your code from blocking other ROS interfaces. I have provided a starting template in the provided `A7_lab4_ws/src/nav_manager` package.
 
 #### Week 2
 
