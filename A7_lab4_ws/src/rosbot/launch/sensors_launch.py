@@ -3,7 +3,9 @@ from ament_index_python.packages import get_package_share_directory
 
 import launch
 import launch_ros.actions
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
@@ -52,7 +54,12 @@ def generate_launch_description():
 
     # TODO: Launch rviz. 
 
+    use_rviz_arg = DeclareLaunchArgument(
+        'use_rviz', default_value='true',
+        description='Launch the sensors RViz view')
+
     rviz_node = launch_ros.actions.Node(
+        condition = IfCondition(LaunchConfiguration('use_rviz')),
         package = 'rviz2',
         executable = 'rviz2',
         name = 'rviz2',
@@ -64,6 +71,7 @@ def generate_launch_description():
     # Your final returned LaunchDescription includes 
     # a list of all of the nodes, launch files, etc.
     return launch.LaunchDescription([
+        use_rviz_arg,
         sllidar_node,
         orbbec_camera_launch,
         laser_filter_node,
