@@ -8,6 +8,12 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
+# ros2 launch rosbot_nav sensors_nav2_rviz_launch.py \
+#   params_file:=/home/<user>/<your_ws>/src/rosbot_nav/params/nav2_params.yaml
+
+# rsync -ruvl A7_lab4_ws ubuntu@192.168.149.1:~/
+
+
 def generate_launch_description():
     rosbot_pkg_path = get_package_share_directory('rosbot')
     nav_pkg_path = get_package_share_directory('rosbot_nav')
