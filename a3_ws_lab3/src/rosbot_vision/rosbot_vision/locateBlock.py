@@ -55,7 +55,8 @@ def _fit_square(xy, yawDeg, size, cameraXy):
     return centre
 
 
-def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, blockHeight, maxHeight, reasons):
+def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, blockHeight, maxHeight, reasons,
+                      requireRaised=True):
     fx, fy, cx, cy = intrinsics
     h, w = depthM.shape[:2]
     if us.min() <= 1 or vs.min() <= 1 or us.max() >= w - 2 or vs.max() >= h - 2:
@@ -83,15 +84,20 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
     normal, dist = plane
     blobUs, blobVs = us, vs
     topXy = None
+    raised = False
     if np.count_nonzero(valid) >= 20:
         heights = dist - (rays[valid] * z[valid, None]) @ normal
         meanDepth = float(np.median(z[valid]))
         blockPx = blockHeight * fx / meanDepth
         elevated = (heights > 0.4 * blockHeight) & (heights < maxHeight)
-        if np.count_nonzero(elevated) < max(15, 0.2 * blockPx ** 2):
+        raised = np.count_nonzero(elevated) >= max(15, 0.2 * blockPx ** 2)
+        if not raised:
             reasons.append(f'only {np.count_nonzero(elevated)} px stand above the table (flat on the table or '
                            f'too tall; median height {1000 * np.median(heights):.0f} mm)')
-            return None
+            if requireRaised:
+                return None
+    # Not raised (or no depth on the blob): go on the color blob alone
+    if raised:
         top = (heights > 0.7 * blockHeight) & (heights < maxHeight)
         pick = top if np.count_nonzero(top) >= 15 else elevated
         topUs, topVs = _largest_component(us[valid][pick], vs[valid][pick], depthM.shape[:2])
@@ -109,7 +115,6 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
         offTable[np.flatnonzero(valid)[heights >= 0.15 * blockHeight]] = True
         keep = (near[vs, us] > 0) | offTable
         blobUs, blobVs = us[keep], vs[keep]
-    # else: depth is missing on this blob, so go on the color blob alone
 
     blobPts = intersect_plane(pixel_rays(blobUs, blobVs, fx, fy, cx, cy), normal, dist - blockHeight)
     if len(blobPts) < 10:
@@ -137,7 +142,7 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
 
 
 def locate_block(bgr, depthM, color, intrinsics, plane, rotation, translation, blockHeight,
-                 minAreaPx=150, maxHeight=0.06, ranges=None, reasons=None):
+                 minAreaPx=150, maxHeight=0.06, ranges=None, reasons=None, requireRaised=True):
     """Centre of the `color` block in the arm frame, or None.
 
     depthM:      depth image in meters, registered to the color image
@@ -145,6 +150,7 @@ def locate_block(bgr, depthM, color, intrinsics, plane, rotation, translation, b
     plane:       (normal, dist) of the table in camera coordinates, normal pointing from the camera to the table, or None
     rotation, translation: camera -> arm frame
     reasons:     optional list that collects why blobs were rejected, for logging
+    requireRaised: reject blobs that depth shows lying flat on the table; False keeps them on color alone
 
     Returns a dict with x, y, z (block centre, m), yaw_deg (arm frame, [-45, 45)), pixel, top_px and size, or None.
     """
@@ -153,7 +159,7 @@ def locate_block(bgr, depthM, color, intrinsics, plane, rotation, translation, b
     best = None
     for us, vs in block_candidates(bgr, color, minAreaPx, ranges):
         result = _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation,
-                                   blockHeight, maxHeight, reasons)
+                                   blockHeight, maxHeight, reasons, requireRaised)
         if result is not None and (best is None or result['top_px'] > best['top_px']):
             best = result
     if best is None and not reasons:

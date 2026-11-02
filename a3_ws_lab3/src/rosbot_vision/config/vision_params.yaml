@@ -13,10 +13,9 @@ vision_node:
     grasp_z_offset: 0.015
     # Use the table seen in the depth image for the camera tilt and height instead of TF
     level_from_table: true
-    # Added to every block's arm-frame x / y (m). +x = farther from the robot. Only for a constant error left after
-    # calibration: put a block at a measured spot, compare with the logged arm=(x, y), and set the difference.
-    # Measured on the robot: picks landed ~0.5 in (12.7 mm) past the blocks in x.
-    xy_offset: [-0.0127, 0.0]
+    # Added to every block's x / y. Leave at 0: TF and the IK share one arm model, so positions need no correction
+    # once the depth-plane check in the log agrees with TF.
+    xy_offset: [0.0, 0.0]
 
     # Smallest color blob looked at (pixels). Block size is checked in meters afterwards.
     min_area: 150
@@ -30,6 +29,11 @@ vision_node:
 
     # HSV ranges, 6 numbers per range: h_lo, s_lo, v_lo, h_hi, s_hi, v_hi (OpenCV hue is 0-179).
     # Lower s_lo / v_lo if a block is missed in shadow or glare; the depth check rejects flat things that match.
-    hsv_red:   [0, 90, 50, 10, 255, 255, 165, 90, 50, 179, 255, 255]
-    hsv_green: [35, 60, 40, 85, 255, 255]
-    hsv_blue:  [95, 80, 40, 130, 255, 255]
+    # Retuned on the gray carpet: auto-exposure washes the top faces out (V=255), so red's top is only S~55 and blue's
+    # top is cyan (H~90). The carpet is S<=15, so low saturation floors are still safe there.
+    hsv_red:   [0, 35, 50, 12, 255, 255, 165, 35, 50, 179, 255, 255]
+    hsv_green: [35, 50, 40, 87, 255, 255]
+    hsv_blue:  [88, 40, 40, 130, 255, 255]
+    # Accept a block from color alone when depth does not show it standing above the table. Its position still comes
+    # from the color pixels projected onto the table plane; only the "is it raised" check is skipped.
+    require_raised: false

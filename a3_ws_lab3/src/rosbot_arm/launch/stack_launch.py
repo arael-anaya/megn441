@@ -1,7 +1,9 @@
 """Entire block stacking stack in one command: camera, arm_control, ik_node, vision_node, stacker_node.
 
     ros2 launch rosbot_arm stack_launch.py
+    ros2 launch rosbot_arm stack_launch.py mode:=calibrate   # once, and after changing the look pose
 """
+import math
 import os
 from ament_index_python.packages import get_package_share_directory
 
@@ -21,48 +23,67 @@ def makeNodes(context):
 
     The camera pose comes from TF (URDF + real servo angles), so the look pose can be changed freely.
     """
-    pulses = [int(LaunchConfiguration(f'j{i}').perform(context)) for i in range(1, 6)]
-    print(f'[stack_launch] look pulses {pulses}')
+    lookXyz = [float(LaunchConfiguration(f'look_{a}').perform(context)) for a in 'xyz']
+    print(f'[stack_launch] look pose (IK target, gripper down) {lookXyz}, '
+          f'grasp_z {LaunchConfiguration("grasp_z").perform(context)}')
+
+    # mode:=calibrate measures the camera -> arm correction instead of stacking
+    executable = 'calibrate_node' if LaunchConfiguration('mode').perform(context) == 'calibrate' else 'stacker_node'
 
     # Give the camera and the other nodes a few seconds to come up before the arm starts moving
     stacker_node = TimerAction(
         period=5.0,
         actions=[Node(
-            package='rosbot_arm', executable='stacker_node', name='stacker_node',
+            package='rosbot_arm', executable=executable, name=executable,
             output='screen', on_exit=launch.actions.Shutdown(),
             parameters=[{
-                'look_pulses': pulses,
+                'look_xyz': lookXyz,
+                'grasp_z': float(LaunchConfiguration('grasp_z').perform(context)),
                 'look_duration': float(LaunchConfiguration('look_duration').perform(context)),
             }])])
 
     return [stacker_node]
 
 
+def makeVision(context):
+    """Vision node, told which way joint 1 points at the look pose so a bad joint 1 reading in TF is caught."""
+    visionParams = os.path.join(get_package_share_directory('rosbot_vision'), 'config', 'vision_params.yaml')
+    lookX = float(LaunchConfiguration('look_x').perform(context))
+    lookY = float(LaunchConfiguration('look_y').perform(context))
+    return [Node(
+        package='rosbot_vision', executable='vision_node', name='vision_node', output='screen',
+        parameters=[visionParams, {'expected_camera_heading_deg': math.degrees(math.atan2(lookY, lookX))}])]
+
+
 def generate_launch_description():
     orbbec_pkg_path = get_package_share_directory('orbbec_camera')
     urdfPath = os.path.join(get_package_share_directory('jetrover_description'), 'urdf', 'jetrover.xacro')
-    visionParams = os.path.join(get_package_share_directory('rosbot_vision'), 'config', 'vision_params.yaml')
 
     # The URDF reads these with $(env ...); the robot normally has them set already
     os.environ.setdefault('LIDAR_TYPE', 'A1')
     os.environ.setdefault('MACHINE_TYPE', 'JetRover_Acker')
 
-    # Look pose, one pulse per joint (pulse = 500 + angle * 500 / 120). Edit on the command line, e.g.
-    #   ros2 launch rosbot_arm stack_launch.py j2:=700 j3:=150 j4:=300
+    # Look pose as an IK target for the tool point, gripper (and camera) pointing straight down. The camera sits about
+    # 5 cm ahead of and 0.11 m above the tool point. Edit on the command line, e.g.
+    #   ros2 launch rosbot_arm stack_launch.py look_x:=0.22 look_z:=0.15
     args = [
         DeclareLaunchArgument('start_camera', default_value='true'),
-        DeclareLaunchArgument('j1', default_value='500', description='look pose joint 1 pulse'),
-        DeclareLaunchArgument('j2', default_value='775', description='look pose joint 2 pulse (125..775)'),
-        DeclareLaunchArgument('j3', default_value='125', description='look pose joint 3 pulse'),
-        DeclareLaunchArgument('j4', default_value='225', description='look pose joint 4 pulse'),
-        DeclareLaunchArgument('j5', default_value='500', description='look pose joint 5 pulse'),
-        DeclareLaunchArgument('look_duration', default_value='2.5', description='seconds to reach look pose'),
+        DeclareLaunchArgument('mode', default_value='stack', description='stack, or calibrate to measure the '
+                              'camera -> arm correction (saved to ~/.ros/block_calibration.json)'),
+        DeclareLaunchArgument('look_x', default_value='0.20', description='look pose tool x (m)'),
+        DeclareLaunchArgument('look_y', default_value='0.0', description='look pose tool y (m)'),
+        DeclareLaunchArgument('look_z', default_value='0.14', description='look pose tool z (m), >= 0.13 for depth'),
+        DeclareLaunchArgument('grasp_z', default_value='-0.01',
+                              description='gripper close height (m) for picks and calibration; lower if it closes '
+                              'above the block'),
+        DeclareLaunchArgument('look_duration', default_value='1.25', description='seconds to reach look pose'),
     ]
 
     camera = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(orbbec_pkg_path, 'launch', 'dabai_dcw.launch.py')),
-        launch_arguments={'camera_name': 'depth_cam', 'depth_registration': 'true'}.items(),
+        # HW alignment puts depth on the same pixels as color (the course block_detector launch uses it too)
+        launch_arguments={'camera_name': 'depth_cam', 'depth_registration': 'true', 'align_mode': 'HW'}.items(),
         condition=IfCondition(LaunchConfiguration('start_camera')))
 
     arm_control_node = Node(
@@ -82,16 +103,12 @@ def generate_launch_description():
     arm_state_publisher = Node(
         package='rosbot_arm', executable='arm_state_publisher', name='arm_state_publisher', output='screen')
 
-    vision_node = Node(
-        package='rosbot_vision', executable='vision_node', name='vision_node', output='screen',
-        parameters=[visionParams])
-
     return launch.LaunchDescription(args + [
         camera,
         arm_control_node,
         ik_node,
         robot_state_publisher,
         arm_state_publisher,
-        vision_node,
+        OpaqueFunction(function=makeVision),
         OpaqueFunction(function=makeNodes),
     ])

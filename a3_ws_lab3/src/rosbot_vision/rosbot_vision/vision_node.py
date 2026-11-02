@@ -51,6 +51,9 @@ class VisionNode(Node):
         self.declare_parameter('min_area', 150)
         # Anything colored whose top is higher than this above the table (the gripper, the robot) is not a block
         self.declare_parameter('max_block_height', 0.06)
+        # Reject color blobs that depth shows lying flat on the table. False keeps them on color alone, for when depth
+        # misses the blocks but there is nothing else block-colored on the table.
+        self.declare_parameter('require_raised', True)
 
         # Each request looks at this many new frames and keeps a color seen in at least min_detections of them
         # (0 = more than half). Results are the median over those frames.
@@ -71,8 +74,13 @@ class VisionNode(Node):
         self.declare_parameter('grasp_z_offset', 0.015)
         # Replace the TF camera tilt and height with the ones measured from the table in the depth image
         self.declare_parameter('level_from_table', True)
-        # Added to every block's x / y in the arm frame; tune if the gripper still lands short or past the blocks
+        # Added to every block's x / y in the arm frame. Leave at 0; only for a constant error measured after the
+        # camera pose is confirmed right (see the depth-plane check in the log)
         self.declare_parameter('xy_offset', [0.0, 0.0])
+        # Direction (deg, arm frame) the camera sits in when detecting, i.e. joint 1's angle at the look pose. The
+        # camera lies in the arm's vertical plane, so TF must put it on this bearing; if it does not (a bad joint 1
+        # reading), every block is rotated about the base by the difference. NaN = trust TF.
+        self.declare_parameter('expected_camera_heading_deg', float('nan'))
 
         # Look the camera pose up in TF instead of using the fixed cam_translation / cam_rpy_deg
         self.declare_parameter('use_tf', True)
@@ -90,6 +98,7 @@ class VisionNode(Node):
         self.depthScale = self.get_parameter('depth_scale').value
         self.minArea = self.get_parameter('min_area').value
         self.maxBlockHeight = self.get_parameter('max_block_height').value
+        self.requireRaised = self.get_parameter('require_raised').value
         self.numFrames = max(1, int(self.get_parameter('num_frames').value))
         minDetections = int(self.get_parameter('min_detections').value)
         self.minDetections = minDetections if minDetections > 0 else self.numFrames // 2 + 1
@@ -109,7 +118,8 @@ class VisionNode(Node):
         self.hsvRanges = {color: hsvFromParam(self.get_parameter(f'hsv_{color}').value) for color in HSV_RANGES}
 
         self.tfBuffer = tf2_ros.Buffer()
-        self.tfListener = tf2_ros.TransformListener(self.tfBuffer, self)
+        # Own thread: with the image and service groups each holding an executor thread, /tf callbacks starve
+        self.tfListener = tf2_ros.TransformListener(self.tfBuffer, self, spin_thread=True)
         self.colorFrame = None
 
         self.bridge = CvBridge()
@@ -194,21 +204,67 @@ class VisionNode(Node):
             pairs.append((bgr, depth))
         return pairs
 
+    def settledTransform(self, timeout=6.0, maxAge=0.6, holdTime=0.5, tolerance=0.002):
+        """Latest TF once it is fresh (recently stamped) and has not moved for holdTime seconds.
+
+        The latest transform can be seconds old right after the arm moves (servo reads are 5 Hz and the TF
+        subscription shares threads with image callbacks). Using it puts every block a whole arm move away.
+        """
+        end = time.monotonic() + timeout
+        last = None
+        stableSince = None
+        error = None
+        while time.monotonic() < end:
+            try:
+                tf = self.tfBuffer.lookup_transform(self.targetFrame, self.colorFrame, rclpy.time.Time())
+            except tf2_ros.TransformException as e:
+                error = e
+                time.sleep(0.05)
+                continue
+            age = self.get_clock().now().nanoseconds * 1e-9 - stampSec(tf.header.stamp)
+            t = tf.transform.translation
+            pos = np.array([t.x, t.y, t.z])
+            if last is not None and np.linalg.norm(pos - last) < tolerance and age < maxAge:
+                if stableSince is None:
+                    stableSince = time.monotonic()
+                if time.monotonic() - stableSince >= holdTime:
+                    return tf
+            else:
+                stableSince = None
+            last = pos
+            time.sleep(0.05)
+        if last is None:
+            self.get_logger().error(
+                f'No TF {self.targetFrame} <- {self.colorFrame}: {error}. '
+                'Is robot_state_publisher / arm_state_publisher running?')
+            return None
+        self.get_logger().warn('Camera TF never settled; the arm may still be moving. Not detecting.')
+        return None
+
     def cameraPose(self):
         """Camera optical frame -> arm frame as (rotation, translation), or None."""
         if not self.useTf:
             return rpy_to_matrix(self.camRpyDeg), np.asarray(self.camTranslation, dtype=float)
-        try:
-            tf = self.tfBuffer.lookup_transform(self.targetFrame, self.colorFrame, rclpy.time.Time())
-        except tf2_ros.TransformException as e:
-            self.get_logger().error(
-                f'No TF {self.targetFrame} <- {self.colorFrame}: {e}. '
-                'Is robot_state_publisher / arm_state_publisher running?')
+        tf = self.settledTransform()
+        if tf is None:
             return None
         q = tf.transform.rotation
         t = tf.transform.translation
         rotation = quat_to_matrix(q.x, q.y, q.z, q.w)
         translation = np.array([t.x, t.y, t.z]) - self.armOrigin
+        expected = float(self.get_parameter('expected_camera_heading_deg').value)
+        if not math.isnan(expected):
+            bearing = math.degrees(math.atan2(translation[1], translation[0]))
+            delta = (expected - bearing + 180.0) % 360.0 - 180.0
+            if abs(delta) > 5.0:
+                self.get_logger().error(
+                    f'TF puts the camera at {bearing:.0f} deg around the base but the arm is at the look pose '
+                    f'({expected:.0f} deg): joint 1 in TF is off by {-delta:.0f} deg (check arm_state_publisher / '
+                    f'joint 1 servo reads). Rotating the camera pose by {delta:.0f} deg so blocks are not swung round.')
+                c, s_ = math.cos(math.radians(delta)), math.sin(math.radians(delta))
+                rz = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+                rotation = rz @ rotation
+                translation = rz @ translation
         self.get_logger().info(
             f'TF {self.targetFrame} <- {self.colorFrame}: camera at '
             f'({translation[0]:.3f}, {translation[1]:.3f}, {translation[2]:.3f}) m, '
@@ -225,9 +281,12 @@ class VisionNode(Node):
                    f'camera is {height:.3f} m from the table, optical axis {tilt:.0f} deg below horizontal. '
                    f'TF says {tfHeight:.3f} m, {tfTilt:.0f} deg.')
         if abs(tilt - tfTilt) > 8.0 or abs(height - tfHeight) > 0.03:
-            self.get_logger().warn(
-                message + ' These disagree, so the arm pose in TF is off and the camera x / y from TF probably is '
-                'too. Picks will land short / long by a constant amount; measure it and set xy_offset.')
+            # TF and the IK share one kinematic model, so a camera pose this far off means the model does not match
+            # the arm (look pose, joint4_sign, servo zeros). Positions will be off by centimetres; no offset fixes it.
+            self.get_logger().error(
+                message + ' These disagree: the arm model in TF does not match the real arm, so block positions '
+                'will be off. Check joint4_sign in arm_state_publisher and that the gripper points straight down '
+                'at the look pose.')
         else:
             self.get_logger().info(message)
 
@@ -256,7 +315,7 @@ class VisionNode(Node):
             reasons = []
             det = locate_block(bgr, depthM, color, intrinsics, plane, rotation, translation,
                                2 * self.blockHalfHeight, self.minArea, self.maxBlockHeight,
-                               self.hsvRanges[color], reasons)
+                               self.hsvRanges[color], reasons, self.requireRaised)
             if det is None:
                 if logPlane:
                     self.get_logger().info(
@@ -296,7 +355,11 @@ class VisionNode(Node):
         self.debugPublisher.publish(self.bridge.cv2_to_imgmsg(debug, encoding='bgr8'))
 
         need = min(self.minDetections, len(pairs))
+        # An empty request means every color
+        wanted = set(request.colors) or set(perColor)
         for color, dets in perColor.items():
+            if color not in wanted:
+                continue
             if len(dets) < need:
                 self.get_logger().warn(
                     f'{color}: seen in {len(dets)} of {len(pairs)} frames (need {need}); not reporting it.')
@@ -333,7 +396,7 @@ def main():
     rclpy.init()
     vision_node = VisionNode()
     # Images keep arriving on one thread while detect_blocks waits for fresh ones on another
-    executor = MultiThreadedExecutor(num_threads=2)
+    executor = MultiThreadedExecutor(num_threads=3)
     executor.add_node(vision_node)
     try:
         executor.spin()

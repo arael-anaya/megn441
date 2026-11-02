@@ -20,8 +20,9 @@ class ArmStatePublisher(Node):
         urdf2 = -j2,  urdf3 = -j3,  urdf4 = joint4_sign * j4
     and joints 1 and 5 have a -z axis, so urdf1 = -j1, urdf5 = -j5.
 
-    joint4_sign was -1 at first, but the camera then sat 2 cm above the table looking backwards while the depth image
-    showed the table 0.18 m away. +1 matches the depth image (camera ~0.11 m up, looking forward and down).
+    URDF joints 2-4 all turn about +y, and the IK gives servos 2-4 the same sense, so joint4_sign must be -1 like the
+    others: running the URDF chain on ik_node's output then lands the tool point on the IK target (test_ikMatchesUrdf).
+    With +1, TF puts the camera somewhere the arm never is, and every block position is off by centimetres.
     """
 
     def __init__(self):
@@ -36,14 +37,26 @@ class ArmStatePublisher(Node):
 
         # Last known pulses so one failed servo read does not drop a joint
         self.pulses = {1: 500, 2: 500, 3: 500, 4: 500, 5: 500}
+        self.readTimes = {i: 0.0 for i in self.pulses}
         self.haveReading = False
         self.requestPending = False
+        # A joint whose read failed (checksum error) keeps its old pulse; publishing it with a fresh stamp puts
+        # the camera where the arm was, not where it is. Stop publishing until every joint has been read again.
+        self.declare_parameter('max_reading_age', 0.7)
+        self.maxReadingAge = self.get_parameter('max_reading_age').value
 
         self.timer = self.create_timer(1.0 / self.get_parameter('rate').value, self.update)
 
     def update(self):
         if self.haveReading:
-            self.publish()
+            now = self.get_clock().now().nanoseconds * 1e-9
+            stale = [i for i, t in self.readTimes.items() if now - t > self.maxReadingAge]
+            if stale:
+                self.get_logger().warn(
+                    f'No recent servo reading for joint(s) {stale}; not publishing joint states.',
+                    throttle_duration_sec=2.0)
+            else:
+                self.publish()
 
         if self.requestPending or not self.getAnglesClient.service_is_ready():
             return
@@ -57,9 +70,11 @@ class ArmStatePublisher(Node):
         if result is None:
             return
         got = 0
+        now = self.get_clock().now().nanoseconds * 1e-9
         for jointId, pulse in zip(result.ids, result.pulses):
             if jointId in self.pulses:
                 self.pulses[jointId] = pulse
+                self.readTimes[jointId] = now
                 got += 1
         if got == len(self.pulses):
             self.haveReading = True
