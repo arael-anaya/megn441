@@ -1,0 +1,39 @@
+vision_node:
+  ros__parameters:
+    # Only used when use_tf is false: camera optical frame -> arm frame, translation in meters, rotation in degrees
+    # (Rz*Ry*Rx), valid for one fixed look pose. With use_tf (default) the pose comes from the URDF + real servo angles.
+    cam_translation: [0.247, 0.0, 0.111]
+    cam_rpy_deg: [180.0, 0.0, -90.0]
+    # Measure the blocks and set to half their height. The full height is used to pick out each block's top face.
+    block_half_height: 0.0127
+    # Report every block at z = table_z + block_half_height (table height in the arm frame) instead of the measured z.
+    fixed_table_z: true
+    table_z: 0.0
+    # Raises every block's z (m) without moving the camera. Increase if the gripper drags on / pushes into the table.
+    grasp_z_offset: 0.015
+    # Use the table seen in the depth image for the camera tilt and height instead of TF
+    level_from_table: true
+    # Added to every block's x / y. Leave at 0: TF and the IK share one arm model, so positions need no correction
+    # once the depth-plane check in the log agrees with TF.
+    xy_offset: [0.0, 0.0]
+
+    # Smallest color blob looked at (pixels). Block size is checked in meters afterwards.
+    min_area: 150
+    # Colored things whose top is higher than this above the table (gripper, robot parts) are not blocks
+    max_block_height: 0.06
+    # Each detect_blocks call looks at num_frames new frames and reports a color seen in at least min_detections
+    # of them (0 = more than half), at the median position.
+    num_frames: 5
+    min_detections: 0
+    frame_timeout: 3.0
+
+    # HSV ranges, 6 numbers per range: h_lo, s_lo, v_lo, h_hi, s_hi, v_hi (OpenCV hue is 0-179).
+    # Lower s_lo / v_lo if a block is missed in shadow or glare; the depth check rejects flat things that match.
+    # Retuned on the gray carpet: auto-exposure washes the top faces out (V=255), so red's top is only S~55 and blue's
+    # top is cyan (H~90). The carpet is S<=15, so low saturation floors are still safe there.
+    hsv_red:   [0, 35, 50, 12, 255, 255, 165, 35, 50, 179, 255, 255]
+    hsv_green: [35, 50, 40, 87, 255, 255]
+    hsv_blue:  [88, 40, 40, 130, 255, 255]
+    # Accept a block from color alone when depth does not show it standing above the table. Its position still comes
+    # from the color pixels projected onto the table plane; only the "is it raised" check is skipped.
+    require_raised: false
