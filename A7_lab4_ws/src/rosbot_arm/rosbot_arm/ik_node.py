@@ -2,8 +2,16 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool
 
-from rosbot_msgs.msg import TargetPose , ForwardPose
 from rosbot_arm import inverseKinematics
+
+
+import time
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rxclpy.executors import MultiThreadedExecutor
+
+from rosbot_msgs.action import Pick, Place
+from rosbot_msgs.msg import  TargetPose , ForwardPose, GripperControl
 
 # Only joint 2 is limited to protect the screen
 min_pulses = [0, 125, 0, 0, 0]
@@ -34,6 +42,20 @@ class IKNode(Node):
         self.ikResultPublisher = self.create_publisher(Bool, "ik_result", 10)
 
         self.jointIds = [1, 2, 3, 4, 5]
+
+        self.declare_parameter('stow_xyz' , [.1, 0.0,0.24])
+        self.declare_parameter('stow_pitch' , -45.0)
+        self.declare_parameter('grasp_pitch' , -90.0)
+        self.declare_parameter('gripper_open', 300)
+        self.declare_parameter('gripper_closed', 600)
+        self.declare_parameter('gripper_open', 300)
+        self.declare_parameter('hover_offset', 0.08)
+        self.declare_parameter('move_time', 2.0)
+        self.declare_parameter('grip_time', 1.0)
+        self.declare_parameter('settle_time', 0.5)
+
+
+
 
     def solvePulses(self, msg):
 
