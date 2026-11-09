@@ -10,11 +10,13 @@ from rclpy.executors import MultiThreadedExecutor
 from demo_msgs.action import Waypoint
 from turtlesim.msg import Pose
 from geometry_msgs.msg import Twist
+from rosbot_msgs.action import armGoal
 from rosbot_msgs.msg import TargetPose , ForwardPose
+from rosbot_msgs.msg import ForwardPose , GripperControl
 
 class ServerNode(Node):
     def __init__(self):
-        super().__init__('server_node')
+        super().__init__('acrm_control_server_node')
         group = ReentrantCallbackGroup()
         self.serv = ActionServer(self, 
                                  Waypoint, 
@@ -23,40 +25,36 @@ class ServerNode(Node):
                                  goal_callback=self.goal_callback,
                                  cancel_callback=self.cancel_callback,
                                  callback_group=group)
-        self.pose_sub = self.create_subscription(Pose, 
-                                                 'turtle1/pose', 
-                                                 self.pose_callback, 10,
-                                                callback_group=group)
-        self.vel_pub = self.create_publisher(Twist, 
-                                             'turtle1/cmd_vel', 10)
+        self.forwardControlSubscription = self.create_subscription(ForwardPose , 'forward_topic' , self.forwardPoseCallback, 10)
+        self.gripperControlSubscription = self.create_subscription(GripperControl , 'gripper_topic' , self.gripperControlCallback , 10)
 
         self.targetPoseSubscription = self.create_subscription(TargetPose , "inverse_topic" , self.targetPoseCallback , 10)
         self.forwardPosePublisher = self.create_publisher(ForwardPose, "forward_topic" , 10)
+        
+        self.armGoalPoseSubscription = self.create_subscription(ForwardPose , "arm_goal_Sub", self.goal_callback, 10)
+        self.armGoalPosePublisher = self.create_publisher(ForwardPose, "arm_goal_Pub", 10)
         
         self.ikResultPublisher = self.create_publisher(Bool, "ik_result", 10)
         
         self.jointIds = [1, 2, 3, 4, 5]
 
-        
 
-        # Starting pose, approximately
-        self.x = 5.5
-        self.y = 5.5
-        self.theta = 0.0
+    def forwardPoseCallback(self, msg):
+    
+            if len(msg.ids) != len(msg.pulses):
+                self.get_logger().warn('ForwardPose ids and pulses differ in length. Ignoring.')
+                return
+    
+            limits = {2: (125, 775), 10: (0, 650)}
+            targets = [(i, min(max(p, limits[i][0]), limits[i][1]) if i in limits else p)
+                        for i, p in zip(msg.ids, msg.pulses)]
+    
+            self.board.bus_servo_set_position(msg.duration, targets)
 
-        self.declare_parameter("Kp", 5.0)
-        self.declare_parameter("Kth", 5.0)
-        self.declare_parameter("max_time", 5.0)
-        self.Kp = self.get_parameter("Kp").value
-        self.Kth = self.get_parameter("Kth").value
-        self.max_time = self.get_parameter("max_time").value
-
-    def pose_callback(self, msg):
-        # Update pose with subscriber
-        # Assigns message content to internal variable
-        self.x = msg.x
-        self.y = msg.y
-        self.theta = msg.theta
+    def gripperControlCallback(self, msg):
+            if msg.pulse > 650: msg.pulse = 650
+    
+            self.board.bus_servo_set_position(msg.duration, [(10, msg.pulse)])
 
     def calc_error(self, target):
         # Utility error calculation function

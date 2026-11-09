@@ -1,0 +1,6 @@
+geometry_msgs/Point block
+---
+bool success
+string message
+---
+string stage

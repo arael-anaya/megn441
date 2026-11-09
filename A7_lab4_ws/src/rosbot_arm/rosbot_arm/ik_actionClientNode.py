@@ -4,33 +4,18 @@ from rclpy.action import ActionClient
 from rclpy.task import Future
 from action_msgs.msg import GoalStatus
 
-from demo_msgs.action import Waypoint
+from rosbot_msgs.action import armGoal
 
-# Corners of the box in turtlesim coordinates (the window is roughly 0-11).
-CORNERS = [(3.0, 3.0), (8.0, 3.0), (8.0, 8.0), (3.0, 8.0)]
-CLOSE_BOX = True  # add a final leg back to the first corner
-
-# Big picture:
-# 1. Run start(), then for each corner (send_next_goal),
-# 2. send_goal_async, wait for accepted/rejected (send_goal_callback)
-# 3. get_results_async, wait for response (result_callback)
-# 4. result_callback calls send_next_goal again
 
 class ikClientNode(Node):
     def __init__(self):
-        super().__init__('client_node')
-        self.client = ActionClient(self, Waypoint, 'waypoint')
-
-        self.waypoints = list(CORNERS)
-        if CLOSE_BOX:
-            self.waypoints.append(CORNERS[0])
-        self.index = 0
+        super().__init__('ik_client_node')
+        self.client = ActionClient(self, armGoal, 'armGoal')
 
         # Completes with True (box finished) or False (a goal failed)
-        self.done_future = Future()
+        self.targetReached = Future()
 
     def start(self):
-        # Wait for the server, then send the first waypoint.
         self.get_logger().info('Waiting for action server...')
         self.client.wait_for_server() # Blocks code until action server is ready
         self.send_next_goal()
@@ -108,7 +93,7 @@ def main():
         node.start()
         rclpy.spin_until_future_complete(node, node.done_future)
         if node.done_future.done() and not node.done_future.result():
-            node.get_logger().error('Box was not completed')
+            node.get_logger().error('Pose was not reached')
     except KeyboardInterrupt:
         pass
     finally:

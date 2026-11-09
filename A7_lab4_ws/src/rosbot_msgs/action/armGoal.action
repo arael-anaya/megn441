@@ -2,7 +2,7 @@
 rosbot_msgs/ForwardPose target
 ---
 # Response: Final location
-geometry_msgs/Point position
+std_msgs/msg/Bool targetReached
 ---
 # Feedback: 
 rosbot_msgs/TargetPose currPose

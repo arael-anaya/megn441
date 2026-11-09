@@ -24,6 +24,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BlockDetection.msg"
   "srv/DetectBlocks.srv"
 
+  "action/Pick.action"
+  "action/Place.action"
+  DEPENDENCIES geometry_msgs
+
+
 
 )
 
