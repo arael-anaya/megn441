@@ -132,9 +132,15 @@ class IKNode(Node):
         time.sleep(self.moveTime + self.settleTime)
         return True
 
+    def moveGripper(self,pulse):
+        self.gripperPublisher.publishh(GripperControl(pulse=int(pulse), duration=float(self.gripTime)))
+        time.sleep(self.gripTime + self.settleTime)
+        return True
+    
     def stow(self):
         x,y,z = self.stowXyz
         return self.moveTo(x, y, z , self.stowPitch)
+    
         
 
 
