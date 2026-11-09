@@ -98,12 +98,22 @@ class NavManager(Node):
             self.get_logger().error('Failed.')
             self.finished = True
 
-    def send_nav_goal(self):
-        # Send goal to navigation action server in this function
+    def init_stow(self):
+        now = self.get_clock().now().nanoseconds / 1e9
+        if self.stow_sent_at is None:
+            if self.stow_pub.get_subscription_count() == 0:
+                self.get_logger().info('Waiting for ik_node...' , throttle_duration_sec=2.0)
+                return
+            msg = TargetPose(x=float(self.stow_xyz[0]), y=float(self.stow_xyz[1]),
+                                     z=float(self.stow_xyz[2]), roll=0.0,
+                                     pitch=float(self.stow_pitch), duration=2.0)
+            self.stow_pub.publish(msg)
+            self.stow_sent_at = now
+            self.get_logger().info('Stowing arm...')
+        elif now - self.stow_sent_at > 3.0:
+            self.state = State.NAV_TO_BLOCK
 
-        # After navigation to target, set the state to whatever comes next
-        # Manager may not be done after sending nav goal 
-        self.state = State.DONE
+
 
 def main():
     rclpy.init()
