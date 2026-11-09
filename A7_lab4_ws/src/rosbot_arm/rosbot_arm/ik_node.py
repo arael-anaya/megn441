@@ -194,7 +194,19 @@ class IKNode(Node):
         ]
 
         return self.runSteps(goalHandle, Pick, steps)
-    
+
+    def executePlace(self, goalHandle):
+        t = goalHandle.request.block
+        h, pitch = self.hoverOffset, self.graspPitch
+
+        steps = [
+            ('moving over target', lambda: self.moveTo(t.x, t.y, t.z+h, pitch)),
+            ('lowering' ,           lambda: self.moveTo(t.x,t.y,t.z, pitch)),
+            ('releasing' ,          lambda: self.moveGripper(self.gripperOpen)),
+            ('retreating' ,         lambda: self.moveTo(t.x, t.y, t.z+h, pitch)),
+            ('stowing', self.stow)
+        ]
+        return self.runSteps(goalHandle, Place, steps)
     
         
 
