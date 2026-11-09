@@ -65,6 +65,26 @@ class IKNode(Node):
         self.gripTime = p('grip_time')
         self.settle_time = p('settle_time')
 
+        self.gripperPublisher = self.create_publisher(GripperControl, 'gripper_topic', 10)
+        self.busy = False
+
+        self.cbGroup = ReentrantCallbackGroup() #Multithreaded bs callback stuff
+        self.pickServer = ActionServer(
+            self, Pick, 'pick',
+            execute_callback = self.executePick,
+            goal_callback = self.goalCallback,
+            cancel_callback = self.cancelCallback,
+            callback_group = self.cbGroup)
+
+        self.placeServer = ActionServer(
+                self, Place, 'place',
+                execute_callback = self.executePlace,
+                goal_callback = self.goalCallback,
+                cancel_callback = self.goalCallback,
+                callback_group = self.cbGroup)
+
+        
+
 
 
     def solvePulses(self, msg):
