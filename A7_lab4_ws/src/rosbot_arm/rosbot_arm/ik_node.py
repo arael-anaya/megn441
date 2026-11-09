@@ -155,7 +155,29 @@ class IKNode(Node):
     def cancelCallback(self, goalHandle):
         return CancelResponse.ACCEPT
 
-    
+    def runSteps(self, goalHandle, action, steps):
+        result = action.Result()
+        feedback = action.feedback()
+        try:
+            for stage, step in steps:
+                if goalHandle.is_cancel_requested:
+                    goalHandle.cancelled()
+                    result.successs = False
+                    result.message = f'Cancelled before: {stage}'
+                    return result
+                feedback.stage = stage
+                goalHandle.publish_feedback(feedback)
+                if not step():
+                    goalHandle.abort()
+                    result.success = False
+                    result.message = f'Failed during: {stage}'
+
+            goalHandle.succeed()
+            result.success = True
+            result.message = 'Done'
+            return result
+        finally:
+            self.busy = False
     
     
         
