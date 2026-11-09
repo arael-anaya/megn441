@@ -178,6 +178,22 @@ class IKNode(Node):
             return result
         finally:
             self.busy = False
+
+    def executePick(self, goalHandle):
+        b = goalHandle.request.block
+        h, pitch = self.hoverOffset, self.graspPitch
+
+        # steps is a list of the different states the robot can be n and the corresponding functions assosciated with these states
+        steps = [
+            ('opening gripper',     lambda: self.moveGripper(self.gripperOpen)),
+            ('hovering over block', lambda: self.moveTo(b.x, b.y, b.z + h, pitch)),
+            ('descending',          lambda: self.moveTo(b.x,b.y,b.z, pitch)),
+            ('grasping' ,           lambda: self.moveGripper(self.gripperClosed)),
+            ('lifting',             lambda: self.moveTo(b.y,b.y,b.z + h , pitch)),
+            ('stowing' ,            lambda: self.stow),        
+        ]
+
+        return self.runSteps(goalHandle, Pick, steps)
     
     
         
