@@ -54,6 +54,16 @@ class IKNode(Node):
         self.declare_parameter('grip_time', 1.0)
         self.declare_parameter('settle_time', 0.5)
 
+        p  = lambda name: self.get_parameter(name).value
+        self.stowXyz = p('stow_xys')
+        self.stowPitch = p('stow_pitch')
+        self.graspPitch = p('grasp_pitch')
+        self.gripperOpen = p('gripper_open')
+        self.gripperClosed = p('gripper_closed')
+        self.hoverOffset = p('hover_offset')
+        self.moveTime = p('move_time')
+        self.gripTime = p('grip_time')
+        self.settle_time = p('settle_time')
 
 
 
