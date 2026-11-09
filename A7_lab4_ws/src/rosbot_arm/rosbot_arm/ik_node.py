@@ -63,7 +63,7 @@ class IKNode(Node):
         self.hoverOffset = p('hover_offset')
         self.moveTime = p('move_time')
         self.gripTime = p('grip_time')
-        self.settle_time = p('settle_time')
+        self.settleTime = p('settle_time')
 
         self.gripperPublisher = self.create_publisher(GripperControl, 'gripper_topic', 10)
         self.busy = False
@@ -82,10 +82,6 @@ class IKNode(Node):
                 goal_callback = self.goalCallback,
                 cancel_callback = self.goalCallback,
                 callback_group = self.cbGroup)
-
-        
-
-
 
     def solvePulses(self, msg):
 
@@ -121,6 +117,26 @@ class IKNode(Node):
         goal.duration = msg.duration
         self.forwardPosePublisher.publish(goal)
         self.ikResultPublisher.publish(Bool(data=True))
+
+    def moveTo(self, x, y, z, pitch, roll=0.0):
+        pose = TargetPose(x=float(x), y=float(y), z=float(z), roll=float(roll), pitch=float(pitch), duration=float(self.moveTime))
+        pulses = self.solvePulses(pose)
+        if pulses is None:
+            self.get_logger().error(f'Unreachable: ({x:.3f}, {y:.3f}, {z:.3f}) pitch={pitch}')
+            return False
+        cmd = ForwardPose()
+        cmd.ids = self.jointIds
+        cmd.pulses = pulses
+        cmd.duration = float(self.moveTime)
+        self.forwardPosePublisher.publish(cmd)
+        time.sleep(self.moveTime + self.settleTime)
+        return True
+
+    def stow(self):
+        x,y,z = self.stowXyz
+        return self.moveTo(x, y, z , self.stowPitch)
+        
+
 
 def main():
     rclpy.init()
