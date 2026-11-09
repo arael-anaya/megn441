@@ -69,6 +69,7 @@ class IKNode(Node):
         self.busy = False
 
         self.cbGroup = ReentrantCallbackGroup() #Multithreaded bs callback stuff
+
         self.pickServer = ActionServer(
             self, Pick, 'pick',
             execute_callback = self.executePick,
@@ -140,6 +141,22 @@ class IKNode(Node):
     def stow(self):
         x,y,z = self.stowXyz
         return self.moveTo(x, y, z , self.stowPitch)
+
+    # From here on im lowkey making up i hope it works
+
+    def goalCallback(self, goalRequest):
+        if self.busy:
+            self.get_logger().warn('Arm is busy, rejecting goal.')
+            return GoalResponse.REJECT
+
+        self.busy =  True
+        return GoalResponse.ACCEPT
+
+    def cancelCallback(self, goalHandle):
+        return CancelResponse.ACCEPT
+
+    
+    
     
         
 
