@@ -4,15 +4,27 @@ import rclpy
 from rclpy.node import Node
 from enum import Enum
 
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import Point
+from nav2_msgs.action import NavigationToPose
+from rosbot_msgs.action import Pick, Place
+from rosbot_msgs.msg import TargetPose
+
 # An enum allows you to use words instead of arbitrary
 # numbers to represent your states
 class State(Enum):
     INIT = 1
-    NAVIGATE = 2
+    NAV_TO_BLOCK = 2
     PICK = 3
-    PLACE = 4
+    NAV_TO_GOAL = 4
+    PLACE = 5
+    DONE = 6
+    FAILED = 7
     # You can add other states to represent other behaviors
-    DONE = 5 # Temporarily added NEXT as a state
 
 class NavManager(Node):
     def __init__(self):
@@ -21,15 +33,26 @@ class NavManager(Node):
 
         # The timer calls the timer_callback function 10 times a second.
         self.timer = self.create_timer(0.1, self.timer_callback)
-        # Add subscribers, publishers, action clients, etc. in __init__
 
-        # Can also declare some variables as parameters that can be called
-        # from a launch file or the command line
-        self.declare_parameter('goal_position', [0.0, 0.0, 0.0])
-        self.declare_parameter('block_position', [0.2, 0.0, 0.0])
+        self.declare_parameter('block_nav_pose', [1.0, 0.0, 0.0])    # where to stand to pick
+        self.declare_parameter('block_position', [0.2, 0.0, -0.01])  # block relative to the arm
+        self.declare_parameter('goal_position', [0.0, 0.0, 0.0])     # where to stand to place
+        self.declare_parameter('place_position', [0.2, 0.0, -0.01])  # drop point relative to the arm
+        self.declare_parameter('stow_xyz', [0.1, 0.0, 0.24])         # same as ik_node
+        self.declare_parameter('stow_pitch', -45.0)
 
-        goal_pos = self.get_parameter('goal_position').value
-        block_pos = self.get_parameter('block_position').value
+        self.block_nav_pose = self.get_parameter('block_nav_pose').value
+        self.block_position = self.get_parameter('block_position').value
+        self.goal_nav_pose = self.get_parameter('goal_position').value
+        self.place_position = self.get_parameter('place_position').value
+        self.stow_xyz = self.get_parameter('stow_xyz').value
+        self.stow_pitch = self.get_parameter('stow_pitch').value
+
+        self.nav_client = ActionClient(self, NavigationToPose, 'navigate_to_pose')
+        self.pick_client = ActionClient(self, Pick, 'pick')
+        self.place_client = ActionClient(self, Place, 'place')
+        self.stow_pub = self.create_publisher(TargetPose, 'inverse_topic' , 10)
+        self.stow_sent_at = None
 
         # Keep track of whether bot is currently busy
         self.BUSY = False
@@ -44,23 +67,36 @@ class NavManager(Node):
             # If currently BUSY, do nothing
             return
 
-        # Could just initialize your state to NAVIGATE
-        # but this demonstrates state switching
-        elif self.state is State.INIT:
-            self.state = State.NAVIGATE
-            self.BUSY = False
+        if self.state is State.INIT:
+            self.init_stow()
+          
+        elif self.state is State.NAV_TO_BLOCK:
+            self.send_goal(self.nav_client, self.make_nav_goal(self.block_nav_pose),
+                     State.PICK, 'navigate to block')
 
-        elif self.state is State.NAVIGATE:
-            self.send_nav_goal()
-            self.BUSY = True
-
-        elif self.state is State.DONE:
+        elif self.state is State.PICK:
             # Mark as finished and quit code
-            self.finished = True
+            goal = Pick.Goal()
+            goal.block = self.make_point(self.block_position)
+            self.send_goal(self.pick_client, goal, State.NAV_TO_GOAL, 'pick',
+                            feedback_cb=self.arm_feedback)
 
-        # Include any other states in here that you wish
-        # Timer callback should just handle switching between
-        # other functionality
+        elif self.state is State.NAV_TO_GOAL:
+            self.send_goal(self.nav_client, self.make_nav_goal(self.goal_nav_pose),
+                           State.PLACE, 'navigate to goal')
+
+        elif self.state is State.PLACE:
+            goal = Place.goal()
+            goal.block = self.make_point(self.place_position) #using the block as a makeshift place target pose since the data shared is the same
+            self.send_goal(self.place_client, goal, State.Done, 'place', feedback_cb=self.arm_feedback)
+        
+        elif self.state is State.DONE:
+            self.get_logger().info("Complete.")
+            self.finished = True
+        
+        elif self.state is State.FAILED:
+            self.get_logger().error('Failed.')
+            self.finished = True
 
     def send_nav_goal(self):
         # Send goal to navigation action server in this function
