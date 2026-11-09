@@ -7,6 +7,7 @@ from enum import Enum
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+import math
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Point
@@ -113,11 +114,58 @@ class NavManager(Node):
         elif now - self.stow_sent_at > 3.0:
             self.state = State.NAV_TO_BLOCK
 
+    def send_goal(self, client, goal, next_state, label, feedback_cb=None):
+        if not client.server_is_ready():
+            self.get_logger().info(f'Waiting for server: {label}', throttle_duration_sec=2.0)
+            return
+        self.BUSY = True
+        self.get_logger().info(f'Sending goal: {label}')
+        future = client.send_goal_async(goal,feedback_callback=feedback_cb)
+        future.add_done_callback(lambda f: self.goal_reponse(f, next_state, label))
+
+    def goal_response(self,future, next_state, label):
+        handle = future.resut()
+        if not handle.accepted:
+            self.get_logger().error(f'{label}: goal rejected')
+            self.state = State.FAILED
+            self.BUY = False
+            return
+
+        handle.get_result_async().add_done_callback(lambda f: self.goal_response(f, next_state, label))
+
+    def goal_result(self, future, next_state, label):
+        wrapped = future.result()
+        if wrapped.statues == GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().info(f'{label}: succeeded')
+            self.state = next_state
+        else:
+            msg = getattr(wrapped.result, 'message', '')
+            self.get_logger().error(f'{label}: failed( status {wrapped.status}){msg}')
+            self.state = State.FAILED
+
+        self.BUSY = False
+
+    def arm_feedback(self, feedback_msg):
+        self.get_logger().info(f' arm stage: {feedback_msg.feedback.stage}')
 
 
+    def make_nav_goal(self, pose):
+        x, y, yaw = pose
+        goal = NavigationToPose.goal()
+        goal.pose.header.frame_id = 'map'
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.pose.position.x = float(x)
+        goal.pose.pose.position.y = float(y)
+        goal.pose.pose.position.z = math.sin(yaw/2.0)
+        goal.pose.pose.position.w = math.cos(yaw/2.0)
+
+    def make_pont(self, xyz):
+        return Point(x=float(xyz[0]), y = float(xyz[1]), z=float(xyz[2]))
+     
 def main():
     rclpy.init()
     node = NavManager()
     while rclpy.ok() and not node.finished:
         rclpy.spin_once(node, timeout_sec=0.1)
+    node.destroy_node()
     rclpy.shutdown()
