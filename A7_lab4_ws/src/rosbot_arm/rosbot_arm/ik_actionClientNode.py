@@ -16,7 +16,7 @@ CLOSE_BOX = True  # add a final leg back to the first corner
 # 3. get_results_async, wait for response (result_callback)
 # 4. result_callback calls send_next_goal again
 
-class ClientNode(Node):
+class ikClientNode(Node):
     def __init__(self):
         super().__init__('client_node')
         self.client = ActionClient(self, Waypoint, 'waypoint')
@@ -102,7 +102,7 @@ class ClientNode(Node):
 
 def main():
     rclpy.init()
-    node = ClientNode()
+    node = ikClientNode()
     try:
         # Run start function, then spin node until overall success/failure
         node.start()
