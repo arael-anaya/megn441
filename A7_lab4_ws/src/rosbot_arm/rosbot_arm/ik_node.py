@@ -28,12 +28,9 @@ class IKNode(Node):
     def __init__(self):
         super().__init__('ik_node')
 
-
         self.targetPoseSubscription = self.create_subscription(TargetPose , "inverse_topic" , self.targetPoseCallback , 10)
         self.forwardPosePublisher = self.create_publisher(ForwardPose, "forward_topic" , 10)
 
-
-        # True/False for every request so the stacker knows whether the pose was actually sent
         self.ikResultPublisher = self.create_publisher(Bool, "ik_result", 10)
 
         self.jointIds = [1, 2, 3, 4, 5]
