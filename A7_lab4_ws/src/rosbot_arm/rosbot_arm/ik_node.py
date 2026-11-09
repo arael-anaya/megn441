@@ -8,7 +8,7 @@ from rosbot_arm import inverseKinematics
 import time
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rxclpy.executors import MultiThreadedExecutor
+from rclpy.executors import MultiThreadedExecutor
 
 from rosbot_msgs.action import Pick, Place
 from rosbot_msgs.msg import  TargetPose , ForwardPose, GripperControl
@@ -48,14 +48,13 @@ class IKNode(Node):
         self.declare_parameter('grasp_pitch' , -90.0)
         self.declare_parameter('gripper_open', 300)
         self.declare_parameter('gripper_closed', 600)
-        self.declare_parameter('gripper_open', 300)
         self.declare_parameter('hover_offset', 0.08)
         self.declare_parameter('move_time', 2.0)
         self.declare_parameter('grip_time', 1.0)
         self.declare_parameter('settle_time', 0.5)
 
         p  = lambda name: self.get_parameter(name).value
-        self.stowXyz = p('stow_xys')
+        self.stowXyz = p('stow_xyz')
         self.stowPitch = p('stow_pitch')
         self.graspPitch = p('grasp_pitch')
         self.gripperOpen = p('gripper_open')
@@ -81,7 +80,7 @@ class IKNode(Node):
                 self, Place, 'place',
                 execute_callback = self.executePlace,
                 goal_callback = self.goalCallback,
-                cancel_callback = self.goalCallback,
+                cancel_callback = self.cancelCallback,
                 callback_group = self.cbGroup)
 
     def solvePulses(self, msg):
@@ -134,7 +133,7 @@ class IKNode(Node):
         return True
 
     def moveGripper(self,pulse):
-        self.gripperPublisher.publishh(GripperControl(pulse=int(pulse), duration=float(self.gripTime)))
+        self.gripperPublisher.publish(GripperControl(pulse=int(pulse), duration=float(self.gripTime)))
         time.sleep(self.gripTime + self.settleTime)
         return True
     
@@ -157,12 +156,12 @@ class IKNode(Node):
 
     def runSteps(self, goalHandle, action, steps):
         result = action.Result()
-        feedback = action.feedback()
+        feedback = action.Feedback()
         try:
             for stage, step in steps:
                 if goalHandle.is_cancel_requested:
-                    goalHandle.cancelled()
-                    result.successs = False
+                    goalHandle.canceled()
+                    result.success = False
                     result.message = f'Cancelled before: {stage}'
                     return result
                 feedback.stage = stage
@@ -171,6 +170,7 @@ class IKNode(Node):
                     goalHandle.abort()
                     result.success = False
                     result.message = f'Failed during: {stage}'
+                    return result
 
             goalHandle.succeed()
             result.success = True
@@ -189,8 +189,8 @@ class IKNode(Node):
             ('hovering over block', lambda: self.moveTo(b.x, b.y, b.z + h, pitch)),
             ('descending',          lambda: self.moveTo(b.x,b.y,b.z, pitch)),
             ('grasping' ,           lambda: self.moveGripper(self.gripperClosed)),
-            ('lifting',             lambda: self.moveTo(b.y,b.y,b.z + h , pitch)),
-            ('stowing' ,            lambda: self.stow),        
+            ('lifting',             lambda: self.moveTo(b.x, b.y, b.z + h, pitch)),
+            ('stowing' ,            self.stow),
         ]
 
         return self.runSteps(goalHandle, Pick, steps)
@@ -207,14 +207,18 @@ class IKNode(Node):
             ('stowing', self.stow)
         ]
         return self.runSteps(goalHandle, Place, steps)
-    
-        
-
 
 def main():
     rclpy.init()
     ik_node = IKNode()
-    rclpy.spin(ik_node)
+    executor = MultiThreadedExecutor()
+    executor.add_node(ik_node)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    ik_node.destroy_node()
+
     rclpy.shutdown()
 
 if __name__ == '__main__':
