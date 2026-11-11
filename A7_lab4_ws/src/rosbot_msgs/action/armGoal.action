@@ -1,8 +1,0 @@
-# Request: Target point
-rosbot_msgs/ForwardPose target
----
-# Response: Final location
-std_msgs/msg/Bool targetReached
----
-# Feedback: 
-rosbot_msgs/TargetPose currPose

@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 
-import rclpy
-from rclpy.node import Node
+import math
 from enum import Enum
 
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-import math
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Point
-from nav2_msgs.action import NavigationToPose
+from nav2_msgs.action import NavigateToPose
 from rosbot_msgs.action import Pick, Place
 from rosbot_msgs.msg import TargetPose
 
@@ -49,7 +47,7 @@ class NavManager(Node):
         self.stow_xyz = self.get_parameter('stow_xyz').value
         self.stow_pitch = self.get_parameter('stow_pitch').value
 
-        self.nav_client = ActionClient(self, NavigationToPose, 'navigate_to_pose')
+        self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.pick_client = ActionClient(self, Pick, 'pick')
         self.place_client = ActionClient(self, Place, 'place')
         self.stow_pub = self.create_publisher(TargetPose, 'inverse_topic' , 10)
@@ -76,7 +74,6 @@ class NavManager(Node):
                      State.PICK, 'navigate to block')
 
         elif self.state is State.PICK:
-            # Mark as finished and quit code
             goal = Pick.Goal()
             goal.block = self.make_point(self.block_position)
             self.send_goal(self.pick_client, goal, State.NAV_TO_GOAL, 'pick',
@@ -87,9 +84,9 @@ class NavManager(Node):
                            State.PLACE, 'navigate to goal')
 
         elif self.state is State.PLACE:
-            goal = Place.goal()
+            goal = Place.Goal()
             goal.block = self.make_point(self.place_position) #using the block as a makeshift place target pose since the data shared is the same
-            self.send_goal(self.place_client, goal, State.Done, 'place', feedback_cb=self.arm_feedback)
+            self.send_goal(self.place_client, goal, State.DONE, 'place', feedback_cb=self.arm_feedback)
         
         elif self.state is State.DONE:
             self.get_logger().info("Complete.")
@@ -121,21 +118,21 @@ class NavManager(Node):
         self.BUSY = True
         self.get_logger().info(f'Sending goal: {label}')
         future = client.send_goal_async(goal,feedback_callback=feedback_cb)
-        future.add_done_callback(lambda f: self.goal_reponse(f, next_state, label))
+        future.add_done_callback(lambda f: self.goal_response(f, next_state, label))
 
-    def goal_response(self,future, next_state, label):
-        handle = future.resut()
+    def goal_response(self, future, next_state, label):
+        handle = future.result()
         if not handle.accepted:
             self.get_logger().error(f'{label}: goal rejected')
             self.state = State.FAILED
-            self.BUY = False
+            self.BUSY = False
             return
 
-        handle.get_result_async().add_done_callback(lambda f: self.goal_response(f, next_state, label))
+        handle.get_result_async().add_done_callback(lambda f: self.goal_result(f, next_state, label))
 
     def goal_result(self, future, next_state, label):
         wrapped = future.result()
-        if wrapped.statues == GoalStatus.STATUS_SUCCEEDED:
+        if wrapped.status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info(f'{label}: succeeded')
             self.state = next_state
         else:
@@ -151,15 +148,16 @@ class NavManager(Node):
 
     def make_nav_goal(self, pose):
         x, y, yaw = pose
-        goal = NavigationToPose.goal()
+        goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = 'map'
         goal.pose.header.stamp = self.get_clock().now().to_msg()
         goal.pose.pose.position.x = float(x)
         goal.pose.pose.position.y = float(y)
-        goal.pose.pose.position.z = math.sin(yaw/2.0)
-        goal.pose.pose.position.w = math.cos(yaw/2.0)
+        goal.pose.pose.orientation.z = math.sin(yaw/2.0)
+        goal.pose.pose.orientation.w = math.cos(yaw/2.0)
+        return goal
 
-    def make_pont(self, xyz):
+    def make_point(self, xyz):
         return Point(x=float(xyz[0]), y = float(xyz[1]), z=float(xyz[2]))
      
 def main():
