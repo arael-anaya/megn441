@@ -44,11 +44,11 @@ class IKNode(Node):
         self.jointIds = [1, 2, 3, 4, 5]
 
         self.declare_parameter('stow_xyz' , [.1, 0.0,0.24])
-        self.declare_parameter('stow_pitch' , -45.0)
+        self.declare_parameter('stow_pitch' , -60.0)  
         self.declare_parameter('grasp_pitch' , -90.0)
         self.declare_parameter('gripper_open', 300)
         self.declare_parameter('gripper_closed', 600)
-        self.declare_parameter('hover_offset', 0.08)
+        self.declare_parameter('hover_offset', -0.05)
         self.declare_parameter('move_time', 2.0)
         self.declare_parameter('grip_time', 1.0)
         self.declare_parameter('settle_time', 0.5)

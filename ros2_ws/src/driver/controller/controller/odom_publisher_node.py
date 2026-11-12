@@ -208,6 +208,15 @@ class Controller(Node):
                 self.angular_z = msg.angular.z
         else:
             self.angular_z = 0.0
+
+        # The steering servo is clamped to +/-30 deg in AckermannChassis.set_velocity, so the car
+        # cannot turn tighter than v*tan(30deg)/wheelbase. Clamp the yaw rate used for dead-reckoning
+        # (and for the wheel speed split) to what the hardware can actually do, otherwise odom
+        # integrates turns the car never made.
+        max_angular = abs(self.linear_x) * math.tan(math.radians(30.0)) / self.ackermann.wheelbase
+        if abs(self.angular_z) > max_angular:
+            self.angular_z = math.copysign(max_angular, self.angular_z)
+
         servo_state = BusServoState()
         servo_state.present_id = [1, 9]
         speeds = self.ackermann.set_velocity(self.linear_x, self.angular_z)

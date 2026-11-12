@@ -8,10 +8,12 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PointStamped
 from nav2_msgs.action import NavigateToPose
 from rosbot_msgs.action import Pick, Place
 from rosbot_msgs.msg import TargetPose
+from rclpy.time import Time
+import tf2_ros
 
 # An enum allows you to use words instead of arbitrary
 # numbers to represent your states
@@ -23,6 +25,7 @@ class State(Enum):
     PLACE = 5
     DONE = 6
     FAILED = 7
+    WAIT_POSES = 8   # waiting for the pick / place spots to be clicked in RViz
     # You can add other states to represent other behaviors
 
 class NavManager(Node):
@@ -38,7 +41,15 @@ class NavManager(Node):
         self.declare_parameter('goal_position', [0.0, 0.0, 0.0])     # where to stand to place
         self.declare_parameter('place_position', [0.2, 0.0, -0.01])  # drop point relative to the arm
         self.declare_parameter('stow_xyz', [0.1, 0.0, 0.24])         # same as ik_node
-        self.declare_parameter('stow_pitch', -45.0)
+        self.declare_parameter('stow_pitch', -60.0)  # same as ik_node
+        # If true, the x/y of block_nav_pose and goal_position are replaced by two RViz
+        # "Publish Point" clicks (pick spot first, place spot second). Yaw stays as given.
+        self.declare_parameter('wait_for_clicks', True)
+        # If true, the arrival yaw at each clicked spot is the direction of travel (robot -> pick spot,
+        # then pick spot -> place spot) instead of the yaw in block_nav_pose / goal_position. The hybrid
+        # planner honors the goal heading, so a heading that disagrees with the travel direction
+        # makes it plan loops.
+        self.declare_parameter('face_travel_direction', True)
 
         self.block_nav_pose = self.get_parameter('block_nav_pose').value
         self.block_position = self.get_parameter('block_position').value
@@ -52,6 +63,15 @@ class NavManager(Node):
         self.place_client = ActionClient(self, Place, 'place')
         self.stow_pub = self.create_publisher(TargetPose, 'inverse_topic' , 10)
         self.stow_sent_at = None
+
+        self.wait_for_clicks_enabled = self.get_parameter('wait_for_clicks').value
+        self.block_click = None    # (x, y) of the first click
+        self.goal_click = None     # (x, y) of the second click
+        self.create_subscription(PointStamped, 'clicked_point', self.clicked_point_callback, 10)
+
+        self.face_travel = self.get_parameter('face_travel_direction').value
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Keep track of whether bot is currently busy
         self.BUSY = False
@@ -69,6 +89,9 @@ class NavManager(Node):
         if self.state is State.INIT:
             self.init_stow()
           
+        elif self.state is State.WAIT_POSES:
+            self.wait_for_clicks()
+
         elif self.state is State.NAV_TO_BLOCK:
             self.send_goal(self.nav_client, self.make_nav_goal(self.block_nav_pose),
                      State.PICK, 'navigate to block')
@@ -109,7 +132,56 @@ class NavManager(Node):
             self.stow_sent_at = now
             self.get_logger().info('Stowing arm...')
         elif now - self.stow_sent_at > 3.0:
+            self.state = State.WAIT_POSES if self.wait_for_clicks_enabled else State.NAV_TO_BLOCK
+
+    def clicked_point_callback(self, msg):
+        # Accept clicks as soon as the node is up so an early click isn't lost
+        if self.state not in (State.INIT, State.WAIT_POSES):
+            return
+        if msg.header.frame_id not in ('map', ''):
+            self.get_logger().warn(
+                f"Click is in frame '{msg.header.frame_id}', not 'map'. "
+                "Set RViz Fixed Frame to 'map'. Ignoring.")
+            return
+        if self.block_click is None:
+            self.block_click = (msg.point.x, msg.point.y)
+            self.get_logger().info(f'PICK spot set: ({msg.point.x:.2f}, {msg.point.y:.2f})')
+        elif self.goal_click is None:
+            self.goal_click = (msg.point.x, msg.point.y)
+            self.get_logger().info(f'PLACE spot set: ({msg.point.x:.2f}, {msg.point.y:.2f})')
+
+    def wait_for_clicks(self):
+        if self.block_click is None:
+            self.get_logger().info('Click the PICK spot with Publish Point in RViz...', throttle_duration_sec=3.0)
+        elif self.goal_click is None:
+            self.get_logger().info('Click the PLACE spot with Publish Point in RViz...', throttle_duration_sec=3.0)
+        else:
+            block_yaw = self.block_nav_pose[2]
+            goal_yaw = self.goal_nav_pose[2]
+            if self.face_travel:
+                start = self.robot_xy()
+                if start is None:
+                    self.get_logger().info(
+                        'Waiting for map->base_link TF (set the 2D Pose Estimate in RViz)...',
+                        throttle_duration_sec=3.0)
+                    return
+                block_yaw = math.atan2(self.block_click[1] - start[1], self.block_click[0] - start[0])
+                goal_yaw = math.atan2(self.goal_click[1] - self.block_click[1],
+                                      self.goal_click[0] - self.block_click[0])
+            self.block_nav_pose = [self.block_click[0], self.block_click[1], block_yaw]
+            self.goal_nav_pose = [self.goal_click[0], self.goal_click[1], goal_yaw]
+            self.get_logger().info(
+                f'Pick pose: ({self.block_nav_pose[0]:.2f}, {self.block_nav_pose[1]:.2f}, yaw {math.degrees(block_yaw):.0f} deg); '
+                f'place pose: ({self.goal_nav_pose[0]:.2f}, {self.goal_nav_pose[1]:.2f}, yaw {math.degrees(goal_yaw):.0f} deg)')
             self.state = State.NAV_TO_BLOCK
+
+    def robot_xy(self):
+        """Current robot position in the map frame, or None if localization / TF isn't up yet."""
+        try:
+            t = self.tf_buffer.lookup_transform('map', 'base_link', Time())
+        except tf2_ros.TransformException:
+            return None
+        return (t.transform.translation.x, t.transform.translation.y)
 
     def send_goal(self, client, goal, next_state, label, feedback_cb=None):
         if not client.server_is_ready():
