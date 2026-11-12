@@ -1,19 +1,6 @@
+import math
+
 import numpy as np
-
-
-def median_depth(depth, u, v, half=3):
-    h, w = depth.shape[:2]
-    u = int(round(u))
-    v = int(round(v))
-
-    patch = depth[max(v - half, 0):min(v + half + 1, h),
-                    max(u - half, 0):min(u + half + 1, w)]
-
-    valid = patch[patch>2]
-    if valid.size == 0:
-        return None
-
-    return float(np.median(valid))
 
 
 def depth_to_meters(depth, depthScale):
@@ -23,12 +10,6 @@ def depth_to_meters(depth, depthScale):
         z[~np.isfinite(z)] = 0.0
         return z
     return depth.astype(float) * depthScale
-
-
-def deproject(u, v, z, fx, fy, cx, cy):
-    x = (u - cx) * z / fx
-    y = (v - cy) * z / fy
-    return x, y, z
 
 
 def pixel_rays(us, vs, fx, fy, cx, cy):
@@ -45,18 +26,6 @@ def intersect_plane(rays, normal, offset):
     return rays[good] * (offset / denom[good])[:, None]
 
 
-def rpy_to_matrix(rpyDeg):
-    r, p, y = np.deg2rad(rpyDeg)
-    rx = np.array([[1, 0, 0], [0, np.cos(r), -np.sin(r)], [0, np.sin(r), np.cos(r)]])
-    ry = np.array([[np.cos(p), 0, np.sin(p)], [0, 1, 0], [-np.sin(p), 0, np.cos(p)]])
-    rz = np.array([[np.cos(y), -np.sin(y), 0], [np.sin(y), np.cos(y), 0], [0, 0, 1]])
-    return rz @ ry @ rx
-
-
-def camera_to_arm(point, translation, rpyDeg):
-    return rpy_to_matrix(rpyDeg) @ np.asarray(point, dtype=float) + np.asarray(translation, dtype=float)
-
-
 def quat_to_matrix(x, y, z, w):
     return np.array([
         [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
@@ -65,12 +34,16 @@ def quat_to_matrix(x, y, z, w):
     ])
 
 
-def fit_table_plane(depth, fx, fy, cx, cy, depthScale, step=8, iterations=150, tol=0.006, seed=0):
+def fit_table_plane(depth, fx, fy, cx, cy, depthScale, step=8, iterations=300, tol=0.006, seed=0,
+                    expectedNormal=None, maxTiltDeg=12.0):
     """RANSAC plane through the depth image, in camera optical coordinates, refined by least squares on the inliers.
 
     Returns (height, tiltDeg, inlierFraction, normal) where height is how far the camera is from the plane, tiltDeg
     is how far the optical axis points below the plane's horizon (90 = looking straight at the plane) and normal is
     the unit plane normal in camera coordinates pointing from the camera toward the plane, or None.
+
+    expectedNormal (from TF) restricts the search to planes within maxTiltDeg of it, so walls and furniture in view
+    cannot be mistaken for the floor.
     """
     h, w = depth.shape[:2]
     vs, us = np.mgrid[0:h:step, 0:w:step]
@@ -81,6 +54,7 @@ def fit_table_plane(depth, fx, fy, cx, cy, depthScale, step=8, iterations=150, t
         return None
     pts = np.column_stack([(us - cx) * z / fx, (vs - cy) * z / fy, z])
 
+    cosLimit = math.cos(math.radians(maxTiltDeg))
     rng = np.random.default_rng(seed)
     best, bestCount = None, 0
     for _ in range(iterations):
@@ -90,6 +64,8 @@ def fit_table_plane(depth, fx, fy, cx, cy, depthScale, step=8, iterations=150, t
         if norm < 1e-9:
             continue
         n /= norm
+        if expectedNormal is not None and abs(n @ expectedNormal) < cosLimit:
+            continue
         count = int(np.count_nonzero(np.abs((pts - a) @ n) < tol))
         if count > bestCount:
             best, bestCount = (n, float(n @ a)), count

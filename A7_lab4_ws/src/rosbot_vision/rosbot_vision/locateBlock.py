@@ -55,6 +55,33 @@ def _fit_square(xy, yawDeg, size, cameraXy):
     return centre
 
 
+def _check_size(xy, cameraPos, blockHeight, reasons):
+    """Sorted (cross-range, along-range) extent in m if the blob can be a block seen from the camera, else None.
+
+    Seen at a shallow angle, a block's camera-facing side face lands on the top-face plane stretched away from the
+    block, by blockHeight * distance / (camera height above the top face). That stretch only lengthens the blob along
+    the line of sight, so only that direction gets the extra allowance.
+    """
+    toBlock = np.median(xy, axis=0) - cameraPos[:2]
+    dist = float(np.linalg.norm(toBlock))
+    if dist < 1e-6:
+        return None
+    along = toBlock / dist
+    across = np.array([-along[1], along[0]])
+    extentAlong = float(np.ptp(xy @ along))
+    extentAcross = float(np.ptp(xy @ across))
+    heightAbove = cameraPos[2] - blockHeight
+    stretch = blockHeight * dist / heightAbove if heightAbove > 0.02 else 3 * blockHeight
+    # a square block turned 45 deg spans 1.41 sides
+    maxAcross = 1.7 * blockHeight
+    maxAlong = 1.7 * blockHeight + 1.3 * stretch
+    if min(extentAcross, extentAlong) < 0.5 * blockHeight or extentAcross > maxAcross or extentAlong > maxAlong:
+        reasons.append(f'blob is {1000 * extentAcross:.0f} (across) x {1000 * extentAlong:.0f} (along) mm on the table, '
+                       f'not a {1000 * blockHeight:.0f} mm block')
+        return None
+    return sorted((extentAcross, extentAlong))
+
+
 def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, blockHeight, maxHeight, reasons,
                       requireRaised=True):
     fx, fy, cx, cy = intrinsics
@@ -123,11 +150,9 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
     armPts = blobPts @ rotation.T + translation
     blobXy = armPts[:, :2]
 
-    blobYaw, sides = _rect_yaw(blobXy)
-    # Side faces seen at a shallow angle stretch the blob toward the camera, so allow it to be long
-    if sides[0] < 0.5 * blockHeight or sides[1] > 2.6 * blockHeight:
-        reasons.append(f'blob is {1000 * sides[0]:.0f} x {1000 * sides[1]:.0f} mm on the table, '
-                       f'not a {1000 * blockHeight:.0f} mm block')
+    blobYaw, _ = _rect_yaw(blobXy)
+    sides = _check_size(blobXy, translation, blockHeight, reasons)
+    if sides is None:
         return None
     # The top face alone gives the cleanest edge directions; the whole blob is skewed by the side faces
     yawDeg = _rect_yaw(topXy)[0] if topXy is not None and len(topXy) >= 30 else blobYaw
@@ -142,7 +167,7 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
 
 
 def locate_block(bgr, depthM, color, intrinsics, plane, rotation, translation, blockHeight,
-                 minAreaPx=150, maxHeight=0.06, ranges=None, reasons=None, requireRaised=True):
+                 minAreaPx=60, maxHeight=0.06, ranges=None, reasons=None, requireRaised=True):
     """Centre of the `color` block in the arm frame, or None.
 
     depthM:      depth image in meters, registered to the color image

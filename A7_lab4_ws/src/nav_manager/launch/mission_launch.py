@@ -10,7 +10,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-PICK_IN_PLACE = True  # pick at start, click one drop point, drive there, drop
+PICK_IN_PLACE = True
 PICK_YAW = 0.0
 PLACE_YAW = 3.14
 
@@ -21,9 +21,9 @@ STOW_XYZ = [0.1, 0.0, 0.24]
 STOW_PITCH = -60.0
 
 
-FINAL_POSE = [5.35, -9.10, -0.925]  # from a drop click (yaw -53 deg)
+FINAL_POSE = [5.35, -9.05, -0.925]
 FINAL_POSE_ONE = False
-END_AT_START_YAW = True  # finish with the yaw the robot started with
+END_AT_START_YAW = True
 GRIPPER_OPEN = 300
 GRIPPER_CLOSED = 600
 
@@ -82,7 +82,6 @@ def generate_launch_description():
             'stow_xyz': STOW_XYZ,
             'stow_pitch': STOW_PITCH,
             'final_pose': FINAL_POSE,
-            # End facing the way the robot started (overrides the yaw in the drop / final pose)
             'end_at_start_yaw': END_AT_START_YAW,
             'finalPoseOne': ParameterValue(LaunchConfiguration('finalPoseOne'), value_type=bool),
         }])

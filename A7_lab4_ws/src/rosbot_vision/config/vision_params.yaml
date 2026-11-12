@@ -1,9 +1,5 @@
 vision_node:
   ros__parameters:
-    # Only used when use_tf is false: camera optical frame -> arm frame, translation in meters, rotation in degrees
-    # (Rz*Ry*Rx), valid for one fixed look pose. With use_tf (default) the pose comes from the URDF + real servo angles.
-    cam_translation: [0.247, 0.0, 0.111]
-    cam_rpy_deg: [180.0, 0.0, -90.0]
     # Measure the blocks and set to half their height. The full height is used to pick out each block's top face.
     block_half_height: 0.0127
     # Report every block at z = table_z + block_half_height (table height in the arm frame) instead of the measured z.
@@ -13,16 +9,13 @@ vision_node:
     grasp_z_offset: 0.015
     # Use the table seen in the depth image for the camera tilt and height instead of TF
     level_from_table: true
-    # Added to every block's x / y. Leave at 0: TF and the IK share one arm model, so positions need no correction
-    # once the depth-plane check in the log agrees with TF.
-    xy_offset: [0.0, 0.0]
 
     # Smallest color blob looked at (pixels). Block size is checked in meters afterwards.
-    min_area: 150
+    min_area: 60
     # Colored things whose top is higher than this above the table (gripper, robot parts) are not blocks
     max_block_height: 0.06
     # Each detect_blocks call looks at num_frames new frames and reports a color seen in at least min_detections
-    # of them (0 = more than half), at the median position.
+    # of them (0 = 2), at the median position.
     num_frames: 5
     min_detections: 0
     frame_timeout: 3.0

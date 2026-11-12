@@ -27,7 +27,7 @@ class State(Enum):
     PLACE = 5
     DONE = 6
     FAILED = 7
-    WAIT_POSES = 8   # waiting for the pick / place spots to be clicked in RViz
+    WAIT_POSES = 8
     # You can add other states to represent other behaviors
 
 class NavManager(Node):
@@ -38,16 +38,14 @@ class NavManager(Node):
         # The timer calls the timer_callback function 10 times a second.
         self.timer = self.create_timer(0.1, self.timer_callback)
 
-        self.declare_parameter('block_nav_pose', [1.0, 0.0, 0.0])    # where to stand to pick
-        self.declare_parameter('block_position', [0.2, 0.0, -0.01])  # block relative to the arm
-        self.declare_parameter('goal_position', [0.0, 0.0, 0.0])     # where to stand to place
-        self.declare_parameter('place_position', [0.2, 0.0, -0.01])  # drop point relative to the arm
-        self.declare_parameter('stow_xyz', [0.1, 0.0, 0.24])         # same as ik_node
-        self.declare_parameter('stow_pitch', -60.0)  # same as ik_node
+        self.declare_parameter('block_nav_pose', [1.0, 0.0, 0.0])
+        self.declare_parameter('block_position', [0.2, 0.0, -0.01])
+        self.declare_parameter('goal_position', [0.0, 0.0, 0.0])
+        self.declare_parameter('place_position', [0.2, 0.0, -0.01])
+        self.declare_parameter('stow_xyz', [0.1, 0.0, 0.24])
+        self.declare_parameter('stow_pitch', -60.0)
         self.declare_parameter('wait_for_clicks', True)
 
-        # Finish facing the way the robot was facing at startup (map-frame yaw), overriding the
-        # yaw of the drop / final pose. Captured from map->base_link before the first nav goal.
         self.declare_parameter('end_at_start_yaw', True)
         self.end_at_start_yaw = self.get_parameter('end_at_start_yaw').value
         self.start_yaw = None
@@ -83,10 +81,9 @@ class NavManager(Node):
         self.stow_sent_at = None
 
         self.wait_for_clicks_enabled = self.get_parameter('wait_for_clicks').value
-        self.block_click = None    # (x, y) of the first click
-        self.goal_click = None     # (x, y) of the second click
+        self.block_click = None
+        self.goal_click = None
         if self.finalPoseOne:
-            # Preset the drop spot so we never wait for a click on it
             self.goal_click = (float(self.final_pose[0]), float(self.final_pose[1]))
             self.get_logger().info(f'finalPoseOne: using hardcoded final pose {self.final_pose}')
         self.create_subscription(PointStamped, 'clicked_point', self.clicked_point_callback, 10)
@@ -110,11 +107,9 @@ class NavManager(Node):
             # If currently BUSY, do nothing
             return
 
-        # Backing off after a rejected nav goal
         if self.get_clock().now().nanoseconds / 1e9 < self.retry_after:
             return
 
-        # Remember the starting heading before any nav goal moves the robot
         if (self.end_at_start_yaw and self.start_yaw is None
                 and self.state in (State.INIT, State.WAIT_POSES, State.PICK)):
             yaw = self.robot_yaw()
@@ -256,7 +251,7 @@ class NavManager(Node):
     def publish_final_pose(self, pose):
         x, y, yaw = (float(v) for v in pose)
         if self.end_at_start_yaw and self.start_yaw is not None:
-            yaw = self.start_yaw   # the yaw we will actually end with
+            yaw = self.start_yaw
         msg = PoseStamped()
         msg.header.frame_id = 'map'
         msg.pose.position.x = x
@@ -270,7 +265,6 @@ class NavManager(Node):
             if p.name == 'final_pose' and len(p.value) == 3:
                 self.final_pose = [float(v) for v in p.value]
                 self.publish_final_pose(self.final_pose)
-                # Re-apply if we haven't already started driving to the drop pose
                 if self.finalPoseOne:
                     self.goal_click = (self.final_pose[0], self.final_pose[1])
                     if self.state in (State.INIT, State.WAIT_POSES, State.NAV_TO_BLOCK, State.PICK):
@@ -280,7 +274,6 @@ class NavManager(Node):
         return SetParametersResult(successful=True)
 
     def robot_yaw(self):
-        """Current robot heading in the map frame (rad), or None if TF isn't up yet."""
         try:
             t = self.tf_buffer.lookup_transform('map', 'base_link', Time())
         except tf2_ros.TransformException:
@@ -289,7 +282,6 @@ class NavManager(Node):
         return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
     def robot_xy(self):
-        """Current robot position in the map frame, or None if localization / TF isn't up yet."""
         try:
             t = self.tf_buffer.lookup_transform('map', 'base_link', Time())
         except tf2_ros.TransformException:
@@ -308,8 +300,6 @@ class NavManager(Node):
     def goal_response(self, future, next_state, label):
         handle = future.result()
         if not handle.accepted:
-            # Nav2 advertises its action server before its lifecycle nodes are active, so an
-            # early nav goal gets rejected. Retry a few times instead of failing the mission.
             if label.startswith('navigate') and self.nav_retries < 15:
                 self.nav_retries += 1
                 self.retry_after = self.get_clock().now().nanoseconds / 1e9 + 2.0

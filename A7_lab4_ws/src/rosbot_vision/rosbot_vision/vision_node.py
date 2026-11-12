@@ -21,8 +21,7 @@ from rosbot_msgs.srv import DetectBlocks
 
 from rosbot_vision.findBlock import HSV_RANGES, maskPixels
 from rosbot_vision.locateBlock import locate_block
-from rosbot_vision.depthUtils import (depth_to_meters, quat_to_matrix, rpy_to_matrix, fit_table_plane,
-                                      level_rotation)
+from rosbot_vision.depthUtils import depth_to_meters, quat_to_matrix, fit_table_plane, level_rotation
 
 
 def stampSec(stamp):
@@ -56,15 +55,13 @@ class VisionNode(Node):
         self.declare_parameter('require_raised', True)
 
         # Each request looks at this many new frames and keeps a color seen in at least min_detections of them
-        # (0 = more than half). Results are the median over those frames.
+        # (0 = 2). Results are the median over those frames.
         self.declare_parameter('num_frames', 5)
         self.declare_parameter('min_detections', 0)
         self.declare_parameter('frame_timeout', 3.0)
         # Color and depth frames further apart in time than this are not paired
         self.declare_parameter('max_pair_gap', 0.1)
 
-        self.declare_parameter('cam_translation', [0.0, 0.0, 0.0])
-        self.declare_parameter('cam_rpy_deg', [0.0, 0.0, 0.0])
         self.declare_parameter('block_half_height', 0.0127)
         # Blocks lie flat on the table, so their height is known. Report z = table_z + block_half_height instead of
         # the measured z. Set False to use the measured z.
@@ -74,16 +71,10 @@ class VisionNode(Node):
         self.declare_parameter('grasp_z_offset', 0.015)
         # Replace the TF camera tilt and height with the ones measured from the table in the depth image
         self.declare_parameter('level_from_table', True)
-        # Added to every block's x / y in the arm frame. Leave at 0; only for a constant error measured after the
-        # camera pose is confirmed right (see the depth-plane check in the log)
-        self.declare_parameter('xy_offset', [0.0, 0.0])
-        # Direction (deg, arm frame) the camera sits in when detecting, i.e. joint 1's angle at the look pose. The
-        # camera lies in the arm's vertical plane, so TF must put it on this bearing; if it does not (a bad joint 1
-        # reading), every block is rotated about the base by the difference. NaN = trust TF.
-        self.declare_parameter('expected_camera_heading_deg', float('nan'))
+        # Yaw comes from the block's top-face edges, which are only a few pixels long far away. Beyond this
+        # distance from the camera (m) the reported yaw is a guess and a warning is logged; re-detect closer.
+        self.declare_parameter('yaw_max_range', 0.55)
 
-        # Look the camera pose up in TF instead of using the fixed cam_translation / cam_rpy_deg
-        self.declare_parameter('use_tf', True)
         # Frame the arm / IK coordinates are measured in: ground level below the base, shifted to the joint 1 axis
         self.declare_parameter('target_frame', 'base_footprint')
         self.declare_parameter('arm_origin_xyz', [0.0251328, 0.0, 0.0])
@@ -101,18 +92,15 @@ class VisionNode(Node):
         self.requireRaised = self.get_parameter('require_raised').value
         self.numFrames = max(1, int(self.get_parameter('num_frames').value))
         minDetections = int(self.get_parameter('min_detections').value)
-        self.minDetections = minDetections if minDetections > 0 else self.numFrames // 2 + 1
+        self.minDetections = minDetections if minDetections > 0 else min(2, self.numFrames)
         self.frameTimeout = self.get_parameter('frame_timeout').value
         self.maxPairGap = self.get_parameter('max_pair_gap').value
-        self.camTranslation = self.get_parameter('cam_translation').value
-        self.camRpyDeg = self.get_parameter('cam_rpy_deg').value
         self.blockHalfHeight = self.get_parameter('block_half_height').value
         self.fixedTableZ = self.get_parameter('fixed_table_z').value
         self.tableZ = self.get_parameter('table_z').value
         self.graspZOffset = self.get_parameter('grasp_z_offset').value
         self.levelFromTable = self.get_parameter('level_from_table').value
-        self.xyOffset = [float(v) for v in self.get_parameter('xy_offset').value]
-        self.useTf = self.get_parameter('use_tf').value
+        self.yawMaxRange = self.get_parameter('yaw_max_range').value
         self.targetFrame = self.get_parameter('target_frame').value
         self.armOrigin = np.asarray(self.get_parameter('arm_origin_xyz').value, dtype=float)
         self.hsvRanges = {color: hsvFromParam(self.get_parameter(f'hsv_{color}').value) for color in HSV_RANGES}
@@ -243,8 +231,6 @@ class VisionNode(Node):
 
     def cameraPose(self):
         """Camera optical frame -> arm frame as (rotation, translation), or None."""
-        if not self.useTf:
-            return rpy_to_matrix(self.camRpyDeg), np.asarray(self.camTranslation, dtype=float)
         tf = self.settledTransform()
         if tf is None:
             return None
@@ -252,62 +238,41 @@ class VisionNode(Node):
         t = tf.transform.translation
         rotation = quat_to_matrix(q.x, q.y, q.z, q.w)
         translation = np.array([t.x, t.y, t.z]) - self.armOrigin
-        expected = float(self.get_parameter('expected_camera_heading_deg').value)
-        if not math.isnan(expected):
-            bearing = math.degrees(math.atan2(translation[1], translation[0]))
-            delta = (expected - bearing + 180.0) % 360.0 - 180.0
-            if abs(delta) > 5.0:
-                self.get_logger().error(
-                    f'TF puts the camera at {bearing:.0f} deg around the base but the arm is at the look pose '
-                    f'({expected:.0f} deg): joint 1 in TF is off by {-delta:.0f} deg (check arm_state_publisher / '
-                    f'joint 1 servo reads). Rotating the camera pose by {delta:.0f} deg so blocks are not swung round.')
-                c, s_ = math.cos(math.radians(delta)), math.sin(math.radians(delta))
-                rz = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
-                rotation = rz @ rotation
-                translation = rz @ translation
-        self.get_logger().info(
-            f'TF {self.targetFrame} <- {self.colorFrame}: camera at '
-            f'({translation[0]:.3f}, {translation[1]:.3f}, {translation[2]:.3f}) m, '
-            f'optical z axis (viewing direction) in arm frame = '
-            f'({rotation[0, 2]:.2f}, {rotation[1, 2]:.2f}, {rotation[2, 2]:.2f}) [looking straight down = (0, 0, -1)]')
+        self.get_logger().debug(
+            f'TF {self.targetFrame} <- {self.colorFrame}: camera at ({translation[0]:.3f}, {translation[1]:.3f}, '
+            f'{translation[2]:.3f}) m, optical axis in arm frame ({rotation[0, 2]:.2f}, {rotation[1, 2]:.2f}, '
+            f'{rotation[2, 2]:.2f})')
         return rotation, translation
 
-    def checkAgainstTf(self, fit, rotation, translation):
-        """Compare the camera pose from TF with what the depth image says about the table."""
-        height, tilt, fraction, _ = fit
-        tfTilt = math.degrees(math.asin(max(-1.0, min(1.0, -rotation[2, 2]))))
-        tfHeight = translation[2] - self.tableZ
-        message = (f'Depth-plane check ({fraction * 100:.0f}% of points on the plane): '
-                   f'camera is {height:.3f} m from the table, optical axis {tilt:.0f} deg below horizontal. '
-                   f'TF says {tfHeight:.3f} m, {tfTilt:.0f} deg.')
-        if abs(tilt - tfTilt) > 8.0 or abs(height - tfHeight) > 0.03:
-            # TF and the IK share one kinematic model, so a camera pose this far off means the model does not match
-            # the arm (look pose, joint4_sign, servo zeros). Positions will be off by centimetres; no offset fixes it.
-            self.get_logger().error(
-                message + ' These disagree: the arm model in TF does not match the real arm, so block positions '
-                'will be off. Check joint4_sign in arm_state_publisher and that the gripper points straight down '
-                'at the look pose.')
-        else:
-            self.get_logger().info(message)
+    def levelledPose(self, depth, intrinsics, pose):
+        """Pose corrected with the floor seen in depth, plus the plane (normal, height), once per request.
 
-    def detectFrame(self, bgr, depth, pose, intrinsics, logPlane):
-        """Every color found in one frame as {color: detection dict}, plus the debug image."""
+        The search is limited to planes near TF's idea of the floor so walls and furniture in view are not mistaken
+        for it. Without a usable fit the TF pose is used as is and the plane is None.
+        """
         rotation, translation = pose
         fx, fy, cx, cy = intrinsics
-        depthM = depth_to_meters(depth, self.depthScale)
-
-        plane = None
-        fit = fit_table_plane(depthM, fx, fy, cx, cy, 1.0)
+        fit = fit_table_plane(depth_to_meters(depth, self.depthScale), fx, fy, cx, cy, 1.0,
+                              expectedNormal=-rotation[2, :])
         if fit is None:
-            self.get_logger().warn('Could not find the table in the depth image; positions will be less accurate.')
-        else:
-            height, _, _, normal = fit
-            plane = (normal, height)
-            if logPlane:
-                self.checkAgainstTf(fit, rotation, translation)
-            if self.levelFromTable:
-                rotation = level_rotation(rotation, normal)
-                translation = np.array([translation[0], translation[1], self.tableZ + height])
+            self.get_logger().warn('Could not find the floor in the depth image; positions will be less accurate.')
+            return pose, None
+        height, tilt, _, normal = fit
+        tfTilt = math.degrees(math.asin(max(-1.0, min(1.0, -rotation[2, 2]))))
+        tfHeight = translation[2] - self.tableZ
+        if abs(tilt - tfTilt) > 8.0 or abs(height - tfHeight) > 0.03:
+            self.get_logger().warn(
+                f'Depth says the camera is {height:.3f} m up, {tilt:.0f} deg down; TF says {tfHeight:.3f} m, '
+                f'{tfTilt:.0f} deg. The arm model in TF does not match the real arm.')
+        if self.levelFromTable:
+            pose = (level_rotation(rotation, normal),
+                    np.array([translation[0], translation[1], self.tableZ + height]))
+        return pose, (normal, height)
+
+    def detectFrame(self, bgr, depth, pose, plane, intrinsics, logReasons):
+        """Every color found in one frame as {color: detection dict}, plus the debug image."""
+        rotation, translation = pose
+        depthM = depth_to_meters(depth, self.depthScale)
 
         found = {}
         debug = bgr.copy()
@@ -317,7 +282,7 @@ class VisionNode(Node):
                                2 * self.blockHalfHeight, self.minArea, self.maxBlockHeight,
                                self.hsvRanges[color], reasons, self.requireRaised)
             if det is None:
-                if logPlane:
+                if logReasons:
                     self.get_logger().info(
                         f'{color}: not found ({maskPixels(bgr, color, self.hsvRanges[color])} px match the color; '
                         f'{"; ".join(reasons)})')
@@ -347,9 +312,12 @@ class VisionNode(Node):
         k = self.cameraInfo.k
         intrinsics = (k[0], k[4], k[2], k[5])
 
+        # One floor fit per request: the camera does not move while the frames are collected
+        pose, plane = self.levelledPose(pairs[-1][1], intrinsics, pose)
+
         perColor = {color: [] for color in HSV_RANGES}
         for i, (bgr, depth) in enumerate(pairs):
-            found, debug = self.detectFrame(bgr, depth, pose, intrinsics, logPlane=(i == 0))
+            found, debug = self.detectFrame(bgr, depth, pose, plane, intrinsics, logReasons=(i == 0))
             for color, det in found.items():
                 perColor[color].append(det)
         self.debugPublisher.publish(self.bridge.cv2_to_imgmsg(debug, encoding='bgr8'))
@@ -365,13 +333,19 @@ class VisionNode(Node):
                     f'{color}: seen in {len(dets)} of {len(pairs)} frames (need {need}); not reporting it.')
                 continue
 
-            x = float(np.median([d['x'] for d in dets])) + self.xyOffset[0]
-            y = float(np.median([d['y'] for d in dets])) + self.xyOffset[1]
+            x = float(np.median([d['x'] for d in dets]))
+            y = float(np.median([d['y'] for d in dets]))
             measuredZ = float(np.median([d['z'] for d in dets]))
             z = (self.tableZ + self.blockHalfHeight if self.fixedTableZ else measuredZ) + self.graspZOffset
             # Yaw repeats every 90 deg, so average on a circle of 4 * yaw
             angles = np.radians([4 * d['yaw_deg'] for d in dets])
             yawDeg = math.degrees(math.atan2(np.sin(angles).mean(), np.cos(angles).mean())) / 4
+
+            distance = math.hypot(x - pose[1][0], y - pose[1][1])
+            if distance > self.yawMaxRange:
+                self.get_logger().warn(
+                    f'{color}: {distance:.2f} m from the camera; yaw is unreliable beyond '
+                    f'{self.yawMaxRange:.2f} m, re-detect from closer before aligning the gripper.')
 
             det = BlockDetection()
             det.color = color

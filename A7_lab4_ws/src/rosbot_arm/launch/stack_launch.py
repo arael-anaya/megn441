@@ -3,7 +3,6 @@
     ros2 launch rosbot_arm stack_launch.py
     ros2 launch rosbot_arm stack_launch.py mode:=calibrate   # once, and after changing the look pose
 """
-import math
 import os
 from ament_index_python.packages import get_package_share_directory
 
@@ -46,13 +45,11 @@ def makeNodes(context):
 
 
 def makeVision(context):
-    """Vision node, told which way joint 1 points at the look pose so a bad joint 1 reading in TF is caught."""
+    """Vision node with the shared vision_params.yaml."""
     visionParams = os.path.join(get_package_share_directory('rosbot_vision'), 'config', 'vision_params.yaml')
-    lookX = float(LaunchConfiguration('look_x').perform(context))
-    lookY = float(LaunchConfiguration('look_y').perform(context))
     return [Node(
         package='rosbot_vision', executable='vision_node', name='vision_node', output='screen',
-        parameters=[visionParams, {'expected_camera_heading_deg': math.degrees(math.atan2(lookY, lookX))}])]
+        parameters=[visionParams])]
 
 
 def generate_launch_description():

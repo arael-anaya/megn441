@@ -121,3 +121,33 @@ def test_finds_each_color_and_misses_absent_one():
 
     bgr, depth = render(rotation, translation, blocks[:2])
     assert locate(bgr, depth, rotation, translation, 'blue') is None
+
+
+def test_distant_block_with_stretched_side_face_is_found():
+    # Seen from far away at a shallow angle the camera-facing side lands on the table as a long streak behind
+    # the block (30 x 94 mm at 0.8 m); that is still one block, not an oversized blob.
+    rotation, translation = camera_pose(30, (0.05, 0.0, 0.30))
+    for dist in (0.5, 0.8, 1.1):
+        bgr, depth = render(rotation, translation, [(dist, 0.02, 10, (0, 0, 220))])
+        det = locate(bgr, depth, rotation, translation)
+        assert det is not None, dist
+        assert abs(det['x'] - dist) < 0.02 and abs(det['y'] - 0.02) < 0.02, (dist, det)
+
+
+def test_floor_fit_prefers_floor_over_a_wall_in_view():
+    rotation, translation = camera_pose(20, (0.05, 0.0, 0.25))
+    _, depth = render(rotation, translation, [])
+    depthM = depth.astype(float) * 0.001
+    vs, us = np.mgrid[0:H, 0:W]
+    raysArm = np.stack([(us - CX) / FX, (vs - CY) / FY, np.ones_like(us, float)], axis=-1).reshape(-1, 3) @ rotation.T
+    # A wall 0.7 m ahead fills the whole top half of the image, with more points than the floor below it
+    wall = (0.7 - translation[0]) / raysArm[:, 0]
+    top = (np.arange(H * W) // W) < 300
+    depthM = depthM.reshape(-1)
+    depthM[top] = wall[top]
+    depthM = depthM.reshape(H, W)
+    free = fit_table_plane(depthM, FX, FY, CX, CY, 1.0)
+    assert free is not None and abs(free[0] - 0.25) > 0.05, 'wall should fool the unguided fit, else this test proves nothing'
+    guided = fit_table_plane(depthM, FX, FY, CX, CY, 1.0, expectedNormal=-rotation[2, :])
+    assert guided is not None
+    assert abs(guided[0] - 0.25) < 0.01, guided[:3]
