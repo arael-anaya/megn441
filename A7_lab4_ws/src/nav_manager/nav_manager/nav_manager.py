@@ -8,7 +8,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Point, PointStamped, PoseStamped
+from geometry_msgs.msg import Point, PointStamped, PoseStamped, PoseWithCovarianceStamped
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav2_msgs.action import NavigateToPose
@@ -28,6 +28,8 @@ class State(Enum):
     DONE = 6
     FAILED = 7
     WAIT_POSES = 8
+    IDLE = 9          # after placing: wait for clicked points
+    NAV_IDLE = 10     # driving to a point clicked while idle
     # You can add other states to represent other behaviors
 
 class NavManager(Node):
@@ -60,6 +62,12 @@ class NavManager(Node):
         self.final_pose = list(self.get_parameter('final_pose').value)
         self.finalPoseOne = self.get_parameter('finalPoseOne').value
 
+        self.declare_parameter('start_pose', [0.0, 0.0, 0.0])
+        self.declare_parameter('startPoseOne', False)
+        self.start_pose = list(self.get_parameter('start_pose').value)
+        self.startPoseOne = self.get_parameter('startPoseOne').value
+        self.initial_pose_pub = self.create_publisher(PoseWithCovarianceStamped, 'initialpose', 10)
+
         self.final_pose_pub = self.create_publisher(
             PoseStamped, 'final_pose_marker',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -83,6 +91,8 @@ class NavManager(Node):
         self.wait_for_clicks_enabled = self.get_parameter('wait_for_clicks').value
         self.block_click = None
         self.goal_click = None
+        self.idle_click = None
+        self.idle_nav_pose = None
         if self.finalPoseOne:
             self.goal_click = (float(self.final_pose[0]), float(self.final_pose[1]))
             self.get_logger().info(f'finalPoseOne: using hardcoded final pose {self.final_pose}')
@@ -119,6 +129,9 @@ class NavManager(Node):
                 self.publish_final_pose(self.final_pose)
 
         if self.state is State.INIT:
+            if self.startPoseOne and self.robot_xy() is None:
+                self.set_start_pose()  # stay in INIT until AMCL accepts it and publishes map->base_link
+                return
             self.init_stow()
           
         elif self.state is State.WAIT_POSES:
@@ -148,8 +161,32 @@ class NavManager(Node):
         elif self.state is State.PLACE:
             goal = Place.Goal()
             goal.block = self.make_point(self.place_position) #using the block as a makeshift place target pose since the data shared is the same
-            self.send_goal(self.place_client, goal, State.DONE, 'place', feedback_cb=self.arm_feedback)
-        
+            self.send_goal(self.place_client, goal, State.IDLE, 'place', feedback_cb=self.arm_feedback)
+
+        elif self.state is State.IDLE:
+            if self.idle_click is None:
+                self.get_logger().info('Idle. Click a point in RViz to drive there...',
+                                       throttle_duration_sec=5.0)
+                return
+            x, y = self.idle_click
+            self.idle_click = None
+            yaw = None
+            if self.end_at_start_yaw and self.start_yaw is not None:
+                yaw = self.start_yaw
+            else:
+                start = self.robot_xy()
+                if start is not None:
+                    yaw = math.atan2(y - start[1], x - start[0])
+            if yaw is None:
+                yaw = 0.0
+            self.idle_nav_pose = [x, y, yaw]
+            self.get_logger().info(f'Driving to clicked point ({x:.2f}, {y:.2f}, yaw {math.degrees(yaw):.0f} deg)')
+            self.state = State.NAV_IDLE
+
+        elif self.state is State.NAV_IDLE:
+            self.send_goal(self.nav_client, self.make_nav_goal(self.idle_nav_pose),
+                           State.IDLE, 'navigate to clicked point')
+
         elif self.state is State.DONE:
             self.get_logger().info("Complete.")
             self.finished = True
@@ -157,6 +194,19 @@ class NavManager(Node):
         elif self.state is State.FAILED:
             self.get_logger().error('Failed.')
             self.finished = True
+
+    def set_start_pose(self):
+        x, y, yaw = (float(v) for v in self.start_pose)
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = 'map'
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
+        msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        msg.pose.covariance[0] = msg.pose.covariance[7] = 0.02
+        msg.pose.covariance[35] = 0.01
+        self.initial_pose_pub.publish(msg)
+        self.get_logger().info(f'Set start pose {self.start_pose}', throttle_duration_sec=1.0)
 
     def init_stow(self):
         now = self.get_clock().now().nanoseconds / 1e9
@@ -179,12 +229,15 @@ class NavManager(Node):
     def clicked_point_callback(self, msg):
         accepted = (State.INIT, State.WAIT_POSES, State.PICK) if self.pick_in_place \
             else (State.INIT, State.WAIT_POSES)
-        if self.state not in accepted:
+        if self.state not in accepted + (State.IDLE,):
             return
         if msg.header.frame_id not in ('map', ''):
             self.get_logger().warn(
                 f"Click is in frame '{msg.header.frame_id}', not 'map'. "
                 "Set RViz Fixed Frame to 'map'. Ignoring.")
+            return
+        if self.state is State.IDLE:
+            self.idle_click = (msg.point.x, msg.point.y)
             return
         if self.pick_in_place:
             if self.goal_click is None:
@@ -308,7 +361,7 @@ class NavManager(Node):
                 self.BUSY = False
                 return
             self.get_logger().error(f'{label}: goal rejected')
-            self.state = State.FAILED
+            self.state = State.IDLE if label == 'navigate to clicked point' else State.FAILED
             self.BUSY = False
             return
 
@@ -322,7 +375,8 @@ class NavManager(Node):
         else:
             msg = getattr(wrapped.result, 'message', '')
             self.get_logger().error(f'{label}: failed( status {wrapped.status}){msg}')
-            self.state = State.FAILED
+            # A failed idle drive just returns to idle so another point can be clicked
+            self.state = State.IDLE if label == 'navigate to clicked point' else State.FAILED
 
         self.BUSY = False
 

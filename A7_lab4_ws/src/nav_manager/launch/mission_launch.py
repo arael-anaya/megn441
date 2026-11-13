@@ -11,6 +11,8 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 PICK_IN_PLACE = True
+START_POSE = [-1.3965, 0.1878, -0.8135]  # measured from /amcl_pose after an RViz 2D Pose Estimate
+START_POSE_ONE = True
 PICK_YAW = 0.0
 PLACE_YAW = 3.14
 
@@ -21,8 +23,8 @@ STOW_XYZ = [0.1, 0.0, 0.24]
 STOW_PITCH = -60.0
 
 
-FINAL_POSE = [5.35, -9.05, -0.925]
-FINAL_POSE_ONE = False
+FINAL_POSE = [5.45, -8.6, -0.869077]
+FINAL_POSE_ONE = True
 END_AT_START_YAW = True
 GRIPPER_OPEN = 300
 GRIPPER_CLOSED = 600
@@ -45,6 +47,10 @@ def generate_launch_description():
     final_pose_one_arg = DeclareLaunchArgument(
         'finalPoseOne', default_value=str(FINAL_POSE_ONE).lower(),
         description='Drive to the hardcoded FINAL_POSE instead of waiting for a drop click')
+
+    start_pose_one_arg = DeclareLaunchArgument(
+        'startPoseOne', default_value=str(START_POSE_ONE).lower(),
+        description='Set the robot start pose to the hardcoded START_POSE instead of using RViz')
 
     nav_stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -84,6 +90,8 @@ def generate_launch_description():
             'final_pose': FINAL_POSE,
             'end_at_start_yaw': END_AT_START_YAW,
             'finalPoseOne': ParameterValue(LaunchConfiguration('finalPoseOne'), value_type=bool),
+            'start_pose': START_POSE,
+            'startPoseOne': ParameterValue(LaunchConfiguration('startPoseOne'), value_type=bool),
         }])
 
     return launch.LaunchDescription([
@@ -91,6 +99,7 @@ def generate_launch_description():
         start_arm_arg,
         pick_in_place_arg,
         final_pose_one_arg,
+        start_pose_one_arg,
         nav_stack,
         arm_control,
         ik_node,
