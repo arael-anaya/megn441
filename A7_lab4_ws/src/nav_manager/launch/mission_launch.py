@@ -10,25 +10,22 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from rosbot_arm.armConfig import GRASP_Z
+
 PICK_IN_PLACE = True
 START_POSE = [-1.3965, 0.1878, -0.8135]  # measured from /amcl_pose after an RViz 2D Pose Estimate
-START_POSE_ONE = True
+START_POSE_ONE = False
 PICK_YAW = 0.0
 PLACE_YAW = 3.14
 
-BLOCK_POSITION = [0.2, 0.0, 0.00]
+# Arm targets (m, from the joint 1 axis, z = floor) used by the Pick / Place actions. The pick x, y is replaced by
+# where the camera sees the red block; these are the fallback when it is not seen.
+BLOCK_POSITION = [0.2, 0.0, GRASP_Z]
 PLACE_POSITION = [0.0, -0.2, 0.00]
-
-STOW_XYZ = [0.1, 0.0, 0.24]
-STOW_PITCH = -60.0
-
 
 FINAL_POSE = [5.45, -8.6, -0.869077]
 FINAL_POSE_ONE = True
 END_AT_START_YAW = True
-GRIPPER_OPEN = 300
-GRIPPER_CLOSED = 600
-
 
 
 def generate_launch_description():
@@ -63,13 +60,16 @@ def generate_launch_description():
 
     ik_node = Node(
         package='rosbot_arm', executable='ik_node', name='ik_node', output='screen',
-        condition=IfCondition(LaunchConfiguration('start_arm')),
-        parameters=[{
-            'stow_xyz': STOW_XYZ,
-            'stow_pitch': STOW_PITCH,
-            'gripper_open': GRIPPER_OPEN,
-            'gripper_closed': GRIPPER_CLOSED,
-        }])
+        condition=IfCondition(LaunchConfiguration('start_arm')))
+
+    # The vision node works out where the camera is from the arm pose ik_node commands (forward_topic), so no
+    # robot_state_publisher / arm_state_publisher here: the robot's own bringup already runs a robot_state_publisher
+    # and a second joint state source only makes the two fight.
+    vision_params = os.path.join(
+        get_package_share_directory('rosbot_vision'), 'config', 'vision_params.yaml')
+    vision_node = Node(
+        package='rosbot_vision', executable='vision_node', name='vision_node', output='screen',
+        parameters=[vision_params])
 
     nav_manager = Node(
         package='nav_manager',
@@ -85,8 +85,6 @@ def generate_launch_description():
             'goal_position': [0.0, 0.0, PLACE_YAW],
             'block_position': BLOCK_POSITION,
             'place_position': PLACE_POSITION,
-            'stow_xyz': STOW_XYZ,
-            'stow_pitch': STOW_PITCH,
             'final_pose': FINAL_POSE,
             'end_at_start_yaw': END_AT_START_YAW,
             'finalPoseOne': ParameterValue(LaunchConfiguration('finalPoseOne'), value_type=bool),
@@ -103,6 +101,7 @@ def generate_launch_description():
         nav_stack,
         arm_control,
         ik_node,
+        vision_node,
         nav_manager,
     ])
 

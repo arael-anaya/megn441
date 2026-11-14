@@ -9,9 +9,25 @@ from rosbot_msgs.msg import TargetPose, GripperControl
 from rosbot_msgs.srv import DetectBlocks
 
 from rosbot_arm import calibration
+from rosbot_arm.armConfig import (BLOCK_SIZE, CAMERA_AHEAD, GRIPPER_OPEN, GRIPPER_CLOSED, LOOK_XYZ, GRASP_Z,
+                                  REACH_ERROR, towardBase, gripRoll)
 
-# Bottom of the stack first
-STACK_ORDER = ['red', 'green', 'blue']
+STACK_ORDER = ['red', 'green', 'blue']  # bottom of the stack first
+STACK_XY = (0.0, -0.20)
+HOVER = 0.06  # travel height above every pick and place
+# Tool height (m) to carry a block at between the pick and the stack: clear of the wheel the arm swings over
+TRAVEL_Z = 0.14
+
+# Where the real arm lands compared with the IK model, measured on the robot. These numbers (plus grasp_z and
+# armConfig.REACH_ERROR) are the only corrections: everything else is geometry.
+STACK_LEAN = 0.01    # the gripper lands this much further out again for every block of height it is raised
+RELEASE_GAP = 0.01   # the first block is pushed this far (m) into the floor, later ones let go this far above the stack
+PLACE_LOWER = 0.003   # every block is let go this much (m) lower than that
+
+MOVE_TIME = 1.0
+SETTLE_TIME = 0.5
+LOOK_SETTLE = 1.0  # extra wait at the look pose so arm_state_publisher (5 Hz servo reads) and TF catch up
+DETECT_ATTEMPTS = 10
 
 
 class UnreachableError(Exception):
@@ -22,77 +38,27 @@ class StackerNode(Node):
     def __init__(self, nodeName='stacker_node', applyCalibration=True):
         super().__init__(nodeName)
 
-        self.declare_parameter('stack_x', 0.0)
-        self.declare_parameter('stack_y', -0.20)
-
-        # Tool point height (m) the gripper closes at, for every pick and for calibrate_node. Blocks always sit on the
-        # floor, so this is fixed rather than taken from the camera. Negative values are fine: lower it if the fingers
-        # close above the block, raise it if they hit the floor.
-        self.declare_parameter('grasp_z', -0.01)
-        # Release height of the bottom block of the stack. NaN = grasp_z, the height the block was held at.
-        self.declare_parameter('stack_z', float('nan'))
-        self.declare_parameter('block_size', 0.0254)
-
-        self.declare_parameter('hover_height', 0.06)
-        # How far (m) to lower the release point of every block; increase if blocks are still dropped too high.
-        self.declare_parameter('place_lower', 0.01)
-        # How far (m) to pull each placement toward the arm base, per stack level above the first. Blocks land further
-        # out as the stack gets taller; raise this if they still land too far forward, lower it (or go negative) if short.
-        self.declare_parameter('place_pullback_per_level', 0.01)
-
-        self.declare_parameter('gripper_open', 300)
-        self.declare_parameter('gripper_closed', 600)
-
-        self.declare_parameter('move_duration', 1.0)
-        self.declare_parameter('settle_time', 0.5)
-
-        self.declare_parameter('roll_sign', 1.0)
-        self.declare_parameter('roll_gain', 1.0)  # >1 turns joint 5 further than the computed angle
-        self.declare_parameter('heading_sign', -1.0)  # -1 if off-centre blocks are missed: joint 1 turns the gripper the other way
-
-        # Look pose as an IK target (tool point, gripper pointing straight down), so it goes through the same
-        # kinematic model as the picks. With the URDF camera mount, (0.20, 0, 0.14) puts the camera at about
-        # (0.25, 0, 0.25) looking straight down, 0.22 m above the block tops: as low as the depth camera's ~0.2 m
-        # minimum range allows. Lower look_z below ~0.13 and depth drops out on the blocks.
-        self.declare_parameter('look_xyz', [0.20, 0.0, 0.14])
+        self.declare_parameter('look_xyz', LOOK_XYZ)
         self.declare_parameter('look_duration', 1.25)
-        # Extra wait at the look pose so arm_state_publisher (5 Hz servo reads) and TF catch up with the real arm
-        self.declare_parameter('look_settle', 1.0)
-        self.declare_parameter('go_to_look_pose', True)
-        # Go back to the look pose and find each block again right before picking it, in case it was bumped
-        self.declare_parameter('redetect_each_pick', True)
-        self.declare_parameter('detect_attempts', 10)
-        # Camera -> arm correction measured by calibrate_node; applied to every detection when the file exists
-        self.declare_parameter('calibration_file', '~/.ros/block_calibration.json')
+        # Tool point height (m) the gripper closes at. Blocks always sit on the floor, so it is fixed rather than
+        # taken from the camera. See armConfig.GRASP_Z: the fingertips must stay just clear of the floor.
+        self.declare_parameter('grasp_z', GRASP_Z)
 
-        self.stackX = self.get_parameter('stack_x').value
-        self.stackY = self.get_parameter('stack_y').value
-        self.graspZ = float(self.get_parameter('grasp_z').value)
-        self.get_logger().info(f'grasp_z = {self.graspZ:.3f} m')
-        self.stackZ = self.get_parameter('stack_z').value
-        self.blockSize = self.get_parameter('block_size').value
-        self.hover = self.get_parameter('hover_height').value
-        self.placeLower = self.get_parameter('place_lower').value
-        self.placePullback = float(self.get_parameter('place_pullback_per_level').value)
-        self.gripperOpen = int(self.get_parameter('gripper_open').value)
-        self.gripperClosed = int(self.get_parameter('gripper_closed').value)
-        self.moveDuration = self.get_parameter('move_duration').value
-        self.settleTime = self.get_parameter('settle_time').value
-        self.rollSign = self.get_parameter('roll_sign').value
-        self.rollGain = self.get_parameter('roll_gain').value
-        self.headingSign = self.get_parameter('heading_sign').value
         self.lookXyz = [float(v) for v in self.get_parameter('look_xyz').value]
         self.lookDuration = float(self.get_parameter('look_duration').value)
-        self.lookSettle = float(self.get_parameter('look_settle').value)
-        self.goToLookPose = self.get_parameter('go_to_look_pose').value
-        self.redetectEachPick = self.get_parameter('redetect_each_pick').value
-        self.detectAttempts = max(1, int(self.get_parameter('detect_attempts').value))
-        self.calibrationFile = self.get_parameter('calibration_file').value
+        self.graspZ = float(self.get_parameter('grasp_z').value)
+
+        # Camera -> IK target correction measured by calibrate_node. calibrate_node itself turns every correction
+        # off: it needs to see where the camera puts the block.
+        self.correctDetections = applyCalibration
         self.calibration = None
         if applyCalibration:
-            self.loadCalibration()
+            self.calibration, status = calibration.loadFor(self.lookXyz)
+            (self.get_logger().info if self.calibration else self.get_logger().warn)(status)
 
         self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks')
+        # Where the stack stands; updated from the camera after every block placed on it
+        self.stackXy = STACK_XY
 
         self.targetPosePublisher = self.create_publisher(TargetPose, 'inverse_topic', 10)
         self.gripperControlPublisher = self.create_publisher(GripperControl, 'gripper_topic', 10)
@@ -103,30 +69,14 @@ class StackerNode(Node):
     def ikResultCallback(self, msg):
         self.ikResult = msg.data
 
-    def loadCalibration(self):
-        loaded = calibration.load(self.calibrationFile)
-        if loaded is None:
-            self.get_logger().warn(
-                f'No calibration at {self.calibrationFile}; using raw camera positions. '
-                'Run: ros2 launch rosbot_arm stack_launch.py mode:=calibrate')
-            return
-        A, b, lookXyz = loaded
-        if any(abs(a - c) > 1e-3 for a, c in zip(lookXyz, self.lookXyz)):
-            self.get_logger().error(
-                f'Calibration was measured from look pose {lookXyz}, not {self.lookXyz}; not using it. '
-                'Recalibrate after changing the look pose.')
-            return
-        self.calibration = (A, b)
-        self.get_logger().info(f'Using calibration {self.calibrationFile}: {calibration.describe(A, b)}')
-
     def correct(self, block):
-        """Move a detection from where the camera sees it to where the arm has to go for it."""
-        if self.calibration is None:
+        """Turn a detection (where the camera sees the block) into the IK target that puts the gripper on it."""
+        if not self.correctDetections:
             return block
         rawX, rawY = block.x, block.y
-        block.x, block.y, block.yaw = calibration.apply(*self.calibration, block.x, block.y, block.yaw)
+        block.x, block.y, block.yaw = calibration.pickTarget(self.calibration, block.x, block.y, block.yaw)
         self.get_logger().info(
-            f'{block.color}: camera ({rawX:.3f}, {rawY:.3f}) -> arm ({block.x:.3f}, {block.y:.3f})')
+            f'{block.color}: camera ({rawX:.3f}, {rawY:.3f}) -> IK target ({block.x:.3f}, {block.y:.3f})')
         return block
 
     def wait(self, seconds):
@@ -143,41 +93,42 @@ class StackerNode(Node):
                     self.gripperControlPublisher.get_subscription_count() > 0):
                 return True
             rclpy.spin_once(self, timeout_sec=0.1)
+        self.get_logger().error('ik_node / arm_control are not running (nobody on inverse_topic or gripper_topic).')
         return False
 
-    def detectBlocks(self, wanted):
+    def detectBlocks(self, wanted, height=0.0, correct=True):
         """Ask the vision node for blocks until every color in `wanted` is seen or the attempts run out.
-        Returns {color: BlockDetection}, possibly missing some colors."""
+        `height` is how far above the floor their undersides are (a stack). Returns {color: BlockDetection} in arm
+        coordinates, possibly missing some colors; `correct` turns them into IK targets for picking."""
         while not self.detectBlocksSrv.wait_for_service(timeout_sec=1.0):
             if not rclpy.ok():
                 return {}
             self.get_logger().info('Waiting for detect_blocks service...')
 
         blocks = {}
-        for attempt in range(self.detectAttempts):
-            future = self.detectBlocksSrv.call_async(DetectBlocks.Request(colors=list(wanted)))
+        for attempt in range(DETECT_ATTEMPTS):
+            future = self.detectBlocksSrv.call_async(DetectBlocks.Request(colors=list(wanted), height=float(height)))
             rclpy.spin_until_future_complete(self, future)
             result = future.result()
             if result is not None:
                 blocks.update({b.color: b for b in result.blocks if b.color in wanted})
             missing = [c for c in wanted if c not in blocks]
             if not missing:
-                return blocks
+                break
             self.get_logger().warn(
-                f'Not seen yet: {missing} (attempt {attempt + 1}/{self.detectAttempts}), retrying...')
+                f'Not seen yet: {missing} (attempt {attempt + 1}/{DETECT_ATTEMPTS}), retrying...')
             self.wait(0.5)
-        return blocks
+        return {color: self.correct(b) if correct else b for color, b in blocks.items()}
 
     def moveGripper(self, pulse):
         msg = GripperControl()
         msg.pulse = int(pulse)
         msg.duration = 0.4
         self.gripperControlPublisher.publish(msg)
-        self.wait(msg.duration + self.settleTime)
+        self.wait(msg.duration + SETTLE_TIME)
 
-    def moveArm(self, x, y, z, rollDeg, duration=None):
-        """Send the gripper tip to (x, y, z) pointing straight down, and wait until it gets there."""
-        duration = self.moveDuration if duration is None else duration
+    def sendPose(self, x, y, z, rollDeg, duration):
+        """Command the tool to exactly (x, y, z), pointing straight down, and wait until it gets there."""
         msg = TargetPose()
         msg.x = float(x)
         msg.y = float(y)
@@ -197,93 +148,101 @@ class StackerNode(Node):
         if self.ikResult is False:
             raise UnreachableError(f'IK rejected target ({x:.3f}, {y:.3f}, {z:.3f})')
 
-        self.wait(duration + self.settleTime)
+        self.wait(duration + SETTLE_TIME)
+
+    def moveArm(self, x, y, z, rollDeg):
+        """Put the gripper at the real-world point (x, y, z): the commanded pose is pulled in by the arm's reach
+        error. For places that are given in real coordinates (the stack)."""
+        self.sendPose(*towardBase(x, y, REACH_ERROR), z, rollDeg, MOVE_TIME)
+
+    def moveRaw(self, x, y, z, rollDeg):
+        """Send the IK target (x, y, z) as is. For detections, which correct() already turned into IK targets."""
+        self.sendPose(x, y, z, rollDeg, MOVE_TIME)
 
     def moveToLookPose(self):
-        x, y, z = self.lookXyz
-        self.moveArm(x, y, z, 0.0, self.lookDuration)
-        self.wait(self.lookSettle)
+        self.sendPose(*self.lookXyz, 0.0, self.lookDuration)
+        self.wait(LOOK_SETTLE)
 
-    def rollFor(self, x, y, blockYawRad):
-        """Joint 5 spins relative to the arm's current heading (set by joint 1), so subtract the heading.
-        A square block looks the same every 90 degrees, so wrap into [-45, 45)."""
-        heading = math.degrees(math.atan2(y, x))
-        roll = self.rollSign * (math.degrees(blockYawRad) - self.headingSign * heading)
-        return self.rollGain * (((roll + 45.0) % 90.0) - 45.0)
+    def touchDown(self, x, y, z, rollDeg, atBottom, move=None):
+        """Hover over (x, y), go down to z, do `atBottom`, come back up. `move` is moveArm (default) or moveRaw."""
+        move = move or self.moveArm
+        move(x, y, z + HOVER, rollDeg)
+        move(x, y, z, rollDeg)
+        atBottom()
+        move(x, y, z + HOVER, rollDeg)
 
-    def pickAndPlace(self, block, level, groundZ):
-        # The detection is already in the IK frame: go straight to it
-        bx, by, bz = block.x, block.y, self.graspZ
-        pickRoll = self.rollFor(bx, by, block.yaw)
+    def lookAtStack(self, color, level):
+        """Right after placing: where the stack really is, (x, y), from the block just put on top (`level` blocks
+        were under it), seen from above with the gripper empty. Blocks drift as they are placed; the next one goes
+        where this one ended up. Keeps the old position if it cannot be seen."""
+        # Tool pulled back so the camera, which sits further out along the arm, is right above the stack
+        x, y = towardBase(*STACK_XY, CAMERA_AHEAD)
+        self.sendPose(x, y, self.lookXyz[2] + (level + 1) * BLOCK_SIZE, 0.0, self.lookDuration)
+        self.wait(LOOK_SETTLE)
+        top = self.detectBlocks([color], height=level * BLOCK_SIZE, correct=False).get(color)
+        if top is None or math.hypot(top.x - STACK_XY[0], top.y - STACK_XY[1]) > 0.05:
+            self.get_logger().warn(f'The {color} block on the stack was not seen near {STACK_XY}; keeping the old '
+                                   f'stack position {self.stackXy}.')
+            return
+        self.stackXy = (top.x, top.y)
+        self.get_logger().info(
+            f'Stack seen at ({top.x:.3f}, {top.y:.3f}), {1000 * (top.x - STACK_XY[0]):+.0f}, '
+            f'{1000 * (top.y - STACK_XY[1]):+.0f} mm from where it should be.')
 
-        # Block centres sit half a block above the ground; stack on a fixed ground height, not this block's noisy z
-        placeZ = groundZ + level * self.blockSize - self.placeLower
-        if level >= 1:
-            placeZ += 0.02  # extra 2 cm of clearance for the second block and everything above it
-        placeRoll = 0.0
-
-        # Pull higher levels back toward the base (radially) to cancel the forward drift
-        stackR = math.hypot(self.stackX, self.stackY)
-        pull = level * self.placePullback
-        scale = (stackR - pull) / stackR if stackR > 1e-6 else 1.0
-        placeX, placeY = self.stackX * scale, self.stackY * scale
+    def pickAndPlace(self, block, level):
+        pickRoll = gripRoll(block.x, block.y, block.yaw)
+        placeX, placeY = towardBase(*self.stackXy, level * STACK_LEAN)
+        placeZ = self.graspZ + level * BLOCK_SIZE + (RELEASE_GAP if level else -RELEASE_GAP) - PLACE_LOWER
+        travelZ = max(TRAVEL_Z, placeZ + HOVER)
 
         self.get_logger().info(
-            f'Picking {block.color} at ({bx:.3f}, {by:.3f}, {bz:.3f}), '
-            f'placing at ({placeX:.3f}, {placeY:.3f}, {placeZ:.3f})')
-        # Joint 5 pulse 500 = roll 0 (gripper horizontal); 500 / 120 pulses per degree, same as ik_node
-        self.get_logger().info(
-            f'{block.color} block yaw {math.degrees(block.yaw):.1f} deg -> roll {pickRoll:.1f} deg '
-            f'(joint 5 pulse {500 + pickRoll * 500 / 120:.0f})')
+            f'Picking {block.color} at ({block.x:.3f}, {block.y:.3f}, {self.graspZ:.3f}) roll {pickRoll:.1f} deg '
+            f'(block yaw {math.degrees(block.yaw):.1f}), placing at ({placeX:.3f}, {placeY:.3f}, {placeZ:.3f})')
 
-        self.moveGripper(self.gripperOpen)
-        self.moveArm(bx, by, bz + self.hover, pickRoll)
-        self.moveArm(bx, by, bz, pickRoll)
-        self.moveGripper(self.gripperClosed)               
-        self.moveArm(bx, by, bz + self.hover, pickRoll)    
-        self.moveArm(placeX, placeY, placeZ + self.hover, placeRoll)
-        self.moveArm(placeX, placeY, placeZ, placeRoll)
-        self.moveGripper(self.gripperOpen)
-        self.moveArm(placeX, placeY, placeZ + self.hover, placeRoll)  # back up
+        self.moveGripper(GRIPPER_OPEN)
+        self.touchDown(block.x, block.y, self.graspZ, pickRoll, lambda: self.moveGripper(GRIPPER_CLOSED),
+                       move=self.moveRaw)
+        # Straight up first, then across: sweeping over at hover height drags the block through the wheel
+        self.moveRaw(block.x, block.y, travelZ, pickRoll)
+        self.moveArm(placeX, placeY, travelZ, 0.0)
+        self.touchDown(placeX, placeY, placeZ, 0.0, lambda: self.moveGripper(GRIPPER_OPEN))
+        self.lookAtStack(block.color, level)
+
+    def lookAgain(self, color, first):
+        """Find one block again right before picking it, in case it was bumped. Returns its detection or None."""
+        self.moveToLookPose()
+        new = self.detectBlocks([color]).get(color)
+        if new is None:
+            if first is not None:
+                self.get_logger().warn(f'{color} not seen again; using where it was first seen.')
+            return first
+        if first is not None and math.hypot(new.x - first.x, new.y - first.y) > 0.05:
+            # Blocks do not teleport; a jump this big is a bad camera pose, not a moved block
+            self.get_logger().warn(
+                f'{color} appears to have moved {100 * math.hypot(new.x - first.x, new.y - first.y):.0f} cm '
+                f'since the first look; ignoring the new reading and using the first.')
+            return first
+        return new
 
     def run(self):
         if not self.waitForSubscribers():
-            self.get_logger().error('ik_node / arm_control are not running (nobody on inverse_topic or gripper_topic).')
             return
 
-        if self.goToLookPose:
-            self.moveGripper(self.gripperOpen)
-            self.moveToLookPose()
-
-        blocks = {c: self.correct(b) for c, b in self.detectBlocks(STACK_ORDER).items()}
+        self.moveGripper(GRIPPER_OPEN)
+        self.moveToLookPose()
+        blocks = self.detectBlocks(STACK_ORDER)
         if not blocks:
             self.get_logger().error('No blocks found. Nothing to stack.')
             return
 
-        groundZ = self.graspZ if math.isnan(self.stackZ) else self.stackZ
-
         level = 0
-        for i, color in enumerate(STACK_ORDER):
-            if self.redetectEachPick and i > 0 and self.goToLookPose:
-                self.moveToLookPose()
-                fresh = self.detectBlocks([color])
-                if color in fresh:
-                    new = self.correct(fresh[color])
-                    old = blocks.get(color)
-                    if old is not None and math.hypot(new.x - old.x, new.y - old.y) > 0.05:
-                        # Blocks do not teleport; a jump this big is a bad camera pose, not a moved block
-                        self.get_logger().warn(
-                            f'{color} appears to have moved {100 * math.hypot(new.x - old.x, new.y - old.y):.0f} cm '
-                            f'since the first look; ignoring the new reading and using the first.')
-                    else:
-                        blocks[color] = new
-                elif color in blocks:
-                    self.get_logger().warn(f'{color} not seen again; using where it was first seen.')
-            if color not in blocks:
+        for color in STACK_ORDER:
+            block = self.lookAgain(color, blocks.get(color))
+            if block is None:
                 self.get_logger().warn(f'{color} block not detected, skipping it.')
                 continue
             try:
-                self.pickAndPlace(blocks[color], level, groundZ)
+                self.pickAndPlace(block, level)
             except UnreachableError as e:
                 self.get_logger().error(f'{e}. Stopping so the arm does not grab or drop blocks in the wrong place.')
                 break

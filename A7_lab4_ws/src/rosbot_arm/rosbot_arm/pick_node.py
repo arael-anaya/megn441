@@ -1,152 +1,123 @@
+"""Look at the floor, find a block, pick it up. The arm-only version of what nav_manager does before it drives.
+
+    ros2 launch rosbot_arm pick_launch.py
+
+Uses the same pieces as the mission: the look pose from armConfig, the vision node's detect_blocks, the saved
+calibration and ik_node's Pick action (which turns the gripper to the block and fails if it closes on nothing).
+"""
+import math
+import time
+
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
 
-from rosbot_msgs.msg import TargetPose, GripperControl
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import Point
+from rosbot_msgs.action import Pick
+from rosbot_msgs.msg import TargetPose
 from rosbot_msgs.srv import DetectBlocks
+
+from rosbot_arm import calibration
+from rosbot_arm.armConfig import LOOK_XYZ, GRASP_Z
+
+LOOK_MOVE_TIME = 2.0
+LOOK_SETTLE = 1.0
+DETECT_ATTEMPTS = 10
+PICK_ATTEMPTS = 4
 
 
 class PickNode(Node):
-    """Move to the detection pose, look for a block, pick it up and lift it."""
-
     def __init__(self):
         super().__init__('pick_node')
 
-        self.declare_parameter('open_pulse', 600)    # gripper limit is 650 in arm_control
-        self.declare_parameter('close_pulse', 300)   # tune so it squeezes the block
-        self.declare_parameter('grip_duration', 1.0)
-
-        self.declare_parameter('look_xyz', [0.18, 0.0, 0.22])
-        self.declare_parameter('pitch', -90.0)
-        self.declare_parameter('roll', 0.0)
-
-        self.declare_parameter('hover_offset', 0.08)   # above block center, meters
-        self.declare_parameter('grasp_offset', 0.0)    # added to block z for the grasp
-        self.declare_parameter('lift_offset', 0.10)
-
-        self.declare_parameter('move_time', 2.0)
-        self.declare_parameter('settle_time', 0.5)
-        self.declare_parameter('detect_retries', 15)
-
-        p = lambda name: self.get_parameter(name).value
-        self.openPulse = p('open_pulse')
-        self.closePulse = p('close_pulse')
-        self.gripDuration = p('grip_duration')
-        self.lookXyz = p('look_xyz')
-        self.pitch = p('pitch')
-        self.roll = p('roll')
-        self.hoverOffset = p('hover_offset')
-        self.graspOffset = p('grasp_offset')
-        self.liftOffset = p('lift_offset')
-        self.moveTime = p('move_time')
-        self.settleTime = p('settle_time')
-        self.detectRetries = p('detect_retries')
+        self.calibration, status = calibration.loadFor(LOOK_XYZ)
+        (self.get_logger().info if self.calibration else self.get_logger().warn)(status)
 
         self.targetPosePublisher = self.create_publisher(TargetPose, 'inverse_topic', 10)
-        self.gripperPublisher = self.create_publisher(GripperControl, 'gripper_topic', 10)
         self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks')
+        self.pickClient = ActionClient(self, Pick, 'pick')
 
-        self.state = 'WAIT_SERVICES'
-        self.nextActionTime = 0.0
-        self.block = None
-        self.future = None
-        self.attempts = 0
+    def wait(self, seconds):
+        """Sleep while still letting ROS process callbacks."""
+        end = time.time() + seconds
+        while rclpy.ok() and time.time() < end:
+            rclpy.spin_once(self, timeout_sec=0.05)
 
-        self.timer = self.create_timer(0.1, self.tick)
+    def waitForArm(self):
+        while rclpy.ok():
+            if (self.targetPosePublisher.get_subscription_count() > 0 and self.detectBlocksSrv.service_is_ready()
+                    and self.pickClient.server_is_ready()):
+                return True
+            self.get_logger().info('Waiting for ik_node (inverse_topic, pick action) and vision_node (detect_blocks)...',
+                                   throttle_duration_sec=2.0)
+            self.wait(0.2)
+        return False
 
-    def now(self):
-        return self.get_clock().now().nanoseconds / 1e9
+    def lookForBlock(self):
+        """Move to the look pose and return the block nearest the middle of the view, or None."""
+        self.targetPosePublisher.publish(TargetPose(
+            x=LOOK_XYZ[0], y=LOOK_XYZ[1], z=LOOK_XYZ[2], roll=0.0, pitch=-90.0, duration=LOOK_MOVE_TIME))
+        self.wait(LOOK_MOVE_TIME + LOOK_SETTLE)
 
-    def setState(self, name):
-        self.state = name
-        self.get_logger().info(f'State: {name}')
+        for attempt in range(DETECT_ATTEMPTS):
+            future = self.detectBlocksSrv.call_async(DetectBlocks.Request())
+            rclpy.spin_until_future_complete(self, future)
+            result = future.result()
+            if result is not None and result.blocks:
+                # The camera sits about 5 cm ahead of the tool point; blocks under it are located best
+                return min(result.blocks, key=lambda b: math.hypot(b.x - (LOOK_XYZ[0] + 0.05), b.y - LOOK_XYZ[1]))
+            self.get_logger().warn(f'No block seen (attempt {attempt + 1}/{DETECT_ATTEMPTS}), retrying.')
+            self.wait(1.0)
+        return None
 
-    def sendPose(self, x, y, z):
-        msg = TargetPose()
-        msg.x = float(x)
-        msg.y = float(y)
-        msg.z = float(z)
-        msg.roll = float(self.roll)
-        msg.pitch = float(self.pitch)
-        msg.duration = float(self.moveTime)
-        self.targetPosePublisher.publish(msg)
-        self.nextActionTime = self.now() + self.moveTime + self.settleTime
+    def pick(self, block):
+        x, y, yaw = calibration.pickTarget(self.calibration, block.x, block.y, block.yaw)
+        self.get_logger().info(
+            f'Picking the {block.color} block: camera ({block.x:.3f}, {block.y:.3f}) -> IK target ({x:.3f}, {y:.3f}), '
+            f'block yaw {math.degrees(yaw):.0f} deg')
+        goal = Pick.Goal()
+        goal.block = Point(x=float(x), y=float(y), z=float(GRASP_Z))
+        goal.yaw = float(yaw)
 
-    def sendGripper(self, pulse):
-        msg = GripperControl()
-        msg.pulse = int(pulse)
-        msg.duration = float(self.gripDuration)
-        self.gripperPublisher.publish(msg)
-        self.nextActionTime = self.now() + self.gripDuration + self.settleTime
+        future = self.pickClient.send_goal_async(
+            goal, feedback_callback=lambda m: self.get_logger().info(f' arm stage: {m.feedback.stage}'))
+        rclpy.spin_until_future_complete(self, future)
+        handle = future.result()
+        if handle is None or not handle.accepted:
+            self.get_logger().error('ik_node rejected the pick goal (arm busy?).')
+            return False
+        resultFuture = handle.get_result_async()
+        rclpy.spin_until_future_complete(self, resultFuture)
+        wrapped = resultFuture.result()
+        if wrapped.status == GoalStatus.STATUS_SUCCEEDED and wrapped.result.success:
+            return True
+        self.get_logger().warn(f'Pick failed: {wrapped.result.message}')
+        return False
 
-    def tick(self):
-        if self.now() < self.nextActionTime:
+    def run(self):
+        if not self.waitForArm():
             return
-
-        if self.state == 'WAIT_SERVICES':
-            if not self.detectBlocksSrv.service_is_ready():
-                self.get_logger().info('Waiting for detect_blocks...', throttle_duration_sec=2.0)
+        for attempt in range(PICK_ATTEMPTS):
+            block = self.lookForBlock()
+            if block is None:
+                self.get_logger().error('No block found. Giving up.')
                 return
-            self.sendGripper(self.openPulse)
-            self.setState('LOOK')
-
-        elif self.state == 'LOOK':
-            self.sendPose(*self.lookXyz)
-            self.setState('DETECT')
-
-        elif self.state == 'DETECT':
-            if self.future is None:
-                self.future = self.detectBlocksSrv.call_async(DetectBlocks.Request())
+            if self.pick(block):
+                self.get_logger().info('Block picked up and stowed.')
                 return
-            if not self.future.done():
-                return
-            blocks = self.future.result().blocks
-            self.future = None
-            if not blocks:
-                self.attempts += 1
-                if self.attempts >= self.detectRetries:
-                    self.get_logger().error('No block found. Giving up.')
-                    self.setState('FAILED')
-                else:
-                    self.get_logger().warn('No block found, retrying.')
-                    self.nextActionTime = self.now() + 1.0
-                return
-            self.block = blocks[0]
-            self.get_logger().info(
-                f'Picking {self.block.color} block at '
-                f'({self.block.x:.3f}, {self.block.y:.3f}, {self.block.z:.3f})')
-            self.setState('HOVER')
-
-        elif self.state == 'HOVER':
-            b = self.block
-            self.sendPose(b.x, b.y, b.z + self.hoverOffset)
-            self.setState('DESCEND')
-
-        elif self.state == 'DESCEND':
-            b = self.block
-            self.sendPose(b.x, b.y, b.z + self.graspOffset)
-            self.setState('GRASP')
-
-        elif self.state == 'GRASP':
-            self.sendGripper(self.closePulse)
-            self.setState('LIFT')
-
-        elif self.state == 'LIFT':
-            b = self.block
-            self.sendPose(b.x, b.y, b.z + self.liftOffset)
-            self.setState('DONE')
-
-        elif self.state == 'DONE':
-            self.get_logger().info('Pick sequence finished.')
-            self.timer.cancel()
-
-        elif self.state == 'FAILED':
-            self.timer.cancel()
+            self.get_logger().warn(f'Trying again ({attempt + 2}/{PICK_ATTEMPTS})...' if attempt + 1 < PICK_ATTEMPTS
+                                   else 'Out of attempts.')
 
 
 def main():
     rclpy.init()
     node = PickNode()
-    rclpy.spin(node)
+    try:
+        node.run()
+    except KeyboardInterrupt:
+        pass
+    node.destroy_node()
     rclpy.shutdown()
 
 

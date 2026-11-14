@@ -11,6 +11,13 @@ import os
 
 import numpy as np
 
+from rosbot_arm.armConfig import REACH_ERROR, towardBase
+
+CALIBRATION_FILE = '~/.ros/block_calibration.json'
+# What the saved map produces: the IK target to send for a block seen at a camera position. Files without this were
+# measured by the first calibrate_node, which aimed REACH_ERROR short of every point; they are not used.
+MAPS_TO = 'ik_target_v2'
+
 
 def fit_affine(detected, commanded):
     """Least-squares A (2x2), b with commanded ~= A @ detected + b. Needs 3+ points not in a line.
@@ -49,12 +56,24 @@ def apply(A, b, x, y, yawRad):
     return float(cx), float(cy), math.atan2(edge[1], edge[0])
 
 
+def pickTarget(calib, x, y, yawRad):
+    """IK target (x, y) and block yaw for grabbing a block the camera reports at (x, y, yawRad).
+
+    With a calibration (A, b) that is the measured map. Without one the camera position is trusted and only the
+    arm's known overreach is taken off.
+    """
+    if calib is not None:
+        return apply(*calib, x, y, yawRad)
+    tx, ty = towardBase(x, y, REACH_ERROR)
+    return tx, ty, yawRad
+
+
 def save(path, A, b, lookXyz, residuals):
     path = os.path.expanduser(path)
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     with open(path, 'w') as f:
         json.dump({'A': np.asarray(A).tolist(), 'b': np.asarray(b).tolist(), 'look_xyz': list(lookXyz),
-                   'max_residual_m': float(np.max(residuals))}, f, indent=2)
+                   'maps_to': MAPS_TO, 'max_residual_m': float(np.max(residuals))}, f, indent=2)
 
 
 def load(path):
@@ -65,3 +84,20 @@ def load(path):
     with open(path) as f:
         data = json.load(f)
     return np.array(data['A']), np.array(data['b']), data['look_xyz']
+
+
+def loadFor(lookXyz, path=CALIBRATION_FILE):
+    """The saved (A, b) if it was measured from this look pose, else None; plus a line saying which, for the log."""
+    loaded = load(path)
+    if loaded is None:
+        return None, (f'No calibration at {path}; using raw camera positions (picks may miss). '
+                      'Run: ros2 launch rosbot_arm stack_launch.py mode:=calibrate')
+    A, b, measuredFrom = loaded
+    with open(os.path.expanduser(path)) as f:
+        if json.load(f).get('maps_to') != MAPS_TO:
+            return None, (f'Calibration {path} was measured before the camera pose and reach handling were fixed; '
+                          'not using it. Run: ros2 launch rosbot_arm stack_launch.py mode:=calibrate')
+    if any(abs(a - float(c)) > 1e-3 for a, c in zip(measuredFrom, lookXyz)):
+        return None, (f'Calibration was measured from look pose {measuredFrom}, not {list(lookXyz)}; not using it. '
+                      'Recalibrate after changing the look pose.')
+    return (A, b), f'Using calibration {path}: {describe(A, b)}'

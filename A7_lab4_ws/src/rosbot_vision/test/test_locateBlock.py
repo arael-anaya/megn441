@@ -8,7 +8,7 @@ from rosbot_vision.locateBlock import locate_block
 FX = FY = 450.0
 CX, CY = 320.0, 240.0
 W, H = 640, 480
-SIZE = 0.0254
+SIZE = 0.028575
 TABLE_BGR = (120, 120, 120)
 
 

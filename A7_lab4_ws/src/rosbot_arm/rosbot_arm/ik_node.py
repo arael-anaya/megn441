@@ -1,160 +1,133 @@
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import Bool
-
-from rosbot_arm import inverseKinematics
-
-
 import time
+
+import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from std_msgs.msg import Bool
 
 from rosbot_msgs.action import Pick, Place
-from rosbot_msgs.msg import  TargetPose , ForwardPose, GripperControl
+from rosbot_msgs.msg import TargetPose, ForwardPose, GripperControl
+from rosbot_msgs.srv import GetAngles
 
-# Only joint 2 is limited to protect the screen
-min_pulses = [0, 125, 0, 0, 0]
-max_pulses = [1000, 775, 1000, 1000, 1000]
+from rosbot_arm import inverseKinematics
+from rosbot_arm.armConfig import (GRIPPER_ID, GRIPPER_OPEN, GRIPPER_CLOSED, GRIPPER_EMPTY_MARGIN, STOW_XYZ,
+                                  STOW_PITCH, gripRoll)
 
+JOINT_IDS = [1, 2, 3, 4, 5]
+GRASP_PITCH = -90.0  # gripper straight down
+HOVER = 0.05         # travel height above a pick or place
+MOVE_TIME = 2.0
+GRIP_TIME = 1.0
+SETTLE_TIME = 0.5
 
-# All joints operate in the range -120 to 120 with a pulse width range of 0 to 1000
-
-def angle_to_pulse(angle):
-
-    pulsePerAngle = 500/120
-    pulse = 500 + angle * pulsePerAngle
-    return pulse
-
-def pulse_to_angle(pulse):
-
-    anglePerPulse = 120/500
-    angle = (pulse-500) * anglePerPulse
-    return angle
 
 class IKNode(Node):
     def __init__(self):
         super().__init__('ik_node')
 
-        self.targetPoseSubscription = self.create_subscription(TargetPose , "inverse_topic" , self.targetPoseCallback , 10)
-        self.forwardPosePublisher = self.create_publisher(ForwardPose, "forward_topic" , 10)
-
-        self.ikResultPublisher = self.create_publisher(Bool, "ik_result", 10)
-
-        self.jointIds = [1, 2, 3, 4, 5]
-
-        self.declare_parameter('stow_xyz' , [.1, 0.0,0.24])
-        self.declare_parameter('stow_pitch' , -60.0)  
-        self.declare_parameter('grasp_pitch' , -90.0)
-        self.declare_parameter('gripper_open', 300)
-        self.declare_parameter('gripper_closed', 600)
-        self.declare_parameter('hover_offset', 0.05)
-        self.declare_parameter('move_time', 2.0)
-        self.declare_parameter('grip_time', 1.0)
-        self.declare_parameter('settle_time', 0.5)
-
-        p  = lambda name: self.get_parameter(name).value
-        self.stowXyz = p('stow_xyz')
-        self.stowPitch = p('stow_pitch')
-        self.graspPitch = p('grasp_pitch')
-        self.gripperOpen = p('gripper_open')
-        self.gripperClosed = p('gripper_closed')
-        self.hoverOffset = p('hover_offset')
-        self.moveTime = p('move_time')
-        self.gripTime = p('grip_time')
-        self.settleTime = p('settle_time')
-
+        self.targetPoseSubscription = self.create_subscription(TargetPose, 'inverse_topic', self.targetPoseCallback, 10)
+        self.forwardPosePublisher = self.create_publisher(ForwardPose, 'forward_topic', 10)
+        self.ikResultPublisher = self.create_publisher(Bool, 'ik_result', 10)
         self.gripperPublisher = self.create_publisher(GripperControl, 'gripper_topic', 10)
+
         self.busy = False
-
-        self.cbGroup = ReentrantCallbackGroup() #Multithreaded bs callback stuff
-
+        # Reentrant so a cancel request gets through while a pick or place is sleeping between steps
+        self.cbGroup = ReentrantCallbackGroup()
+        # arm_control reads the servos; used to check that the gripper closed on something
+        self.getAnglesClient = self.create_client(GetAngles, 'get_angles', callback_group=self.cbGroup)
         self.pickServer = ActionServer(
             self, Pick, 'pick',
-            execute_callback = self.executePick,
-            goal_callback = self.goalCallback,
-            cancel_callback = self.cancelCallback,
-            callback_group = self.cbGroup)
-
+            execute_callback=self.executePick,
+            goal_callback=self.goalCallback,
+            cancel_callback=self.cancelCallback,
+            callback_group=self.cbGroup)
         self.placeServer = ActionServer(
-                self, Place, 'place',
-                execute_callback = self.executePlace,
-                goal_callback = self.goalCallback,
-                cancel_callback = self.cancelCallback,
-                callback_group = self.cbGroup)
+            self, Place, 'place',
+            execute_callback=self.executePlace,
+            goal_callback=self.goalCallback,
+            cancel_callback=self.cancelCallback,
+            callback_group=self.cbGroup)
 
-    def solvePulses(self, msg):
-
+    def sendPose(self, pose):
+        """Send the servos to a TargetPose. Returns False, sending nothing, if it cannot be reached."""
         # Straight down (-90) puts the wrist ~0.17 m above the tip, which leaves low targets beyond ~0.15 m
         # out of reach. If the requested pitch fails, tilt the gripper toward horizontal until it fits.
-        pitches = [msg.pitch] + [p for p in range(-80, -29, 5) if p > msg.pitch]
-        for pitch in pitches:
-            for upDownConstraint in (1, -1):
-                jointAngles = inverseKinematics.solveIK(msg.x, msg.y, msg.z, msg.roll, pitch, upDownConstraint)
-                if jointAngles is None:
-                    continue
-
-                pulses = [int(round(angle_to_pulse(a))) for a in jointAngles]
-                if all(lo <= p <= hi for p, lo, hi in zip(pulses, min_pulses, max_pulses)):
-                    if pitch != msg.pitch:
-                        self.get_logger().info(f'Target needed pitch {pitch} instead of {msg.pitch}.')
-                    return pulses
-        return None
+        for pitch in [pose.pitch] + [p for p in range(-80, -29, 5) if p > pose.pitch]:
+            pulses = inverseKinematics.solvePulses(pose.x, pose.y, pose.z, pose.roll, pitch)
+            if pulses is not None:
+                if pitch != pose.pitch:
+                    self.get_logger().info(f'Target needed pitch {pitch} instead of {pose.pitch}.')
+                self.forwardPosePublisher.publish(ForwardPose(ids=JOINT_IDS, pulses=pulses, duration=pose.duration))
+                return True
+        self.get_logger().warn(
+            f'Target ({pose.x:.3f}, {pose.y:.3f}, {pose.z:.3f}) pitch={pose.pitch} '
+            'is unreachable or outside joint limits. Not sending.')
+        return False
 
     def targetPoseCallback(self, msg):
-        pulses = self.solvePulses(msg)
+        self.ikResultPublisher.publish(Bool(data=self.sendPose(msg)))
 
-        if pulses is None:
-            self.get_logger().warn(
-                f'Target ({msg.x:.3f}, {msg.y:.3f}, {msg.z:.3f}) pitch={msg.pitch} '
-                'is unreachable or outside joint limits. Not sending.')
-            self.ikResultPublisher.publish(Bool(data=False))
-            return
-
-        goal = ForwardPose()
-        goal.ids = self.jointIds
-        goal.pulses = pulses
-        goal.duration = msg.duration
-        self.forwardPosePublisher.publish(goal)
-        self.ikResultPublisher.publish(Bool(data=True))
-
-    def moveTo(self, x, y, z, pitch, roll=0.0):
-        pose = TargetPose(x=float(x), y=float(y), z=float(z), roll=float(roll), pitch=float(pitch), duration=float(self.moveTime))
-        pulses = self.solvePulses(pose)
-        if pulses is None:
-            self.get_logger().error(f'Unreachable: ({x:.3f}, {y:.3f}, {z:.3f}) pitch={pitch}')
+    def moveTo(self, x, y, z, pitch=GRASP_PITCH, roll=0.0):
+        if not self.sendPose(TargetPose(x=float(x), y=float(y), z=float(z), roll=float(roll), pitch=float(pitch),
+                                        duration=MOVE_TIME)):
             return False
-        cmd = ForwardPose()
-        cmd.ids = self.jointIds
-        cmd.pulses = pulses
-        cmd.duration = float(self.moveTime)
-        self.forwardPosePublisher.publish(cmd)
-        time.sleep(self.moveTime + self.settleTime)
+        time.sleep(MOVE_TIME + SETTLE_TIME)
         return True
 
-    def moveGripper(self,pulse):
-        self.gripperPublisher.publish(GripperControl(pulse=int(pulse), duration=float(self.gripTime)))
-        time.sleep(self.gripTime + self.settleTime)
+    def gripperPulse(self):
+        """Where the gripper servo really is (pulse), or None if it cannot be read."""
+        for _ in range(3):
+            if not self.getAnglesClient.service_is_ready():
+                return None
+            future = self.getAnglesClient.call_async(GetAngles.Request())
+            end = time.time() + 1.5
+            while not future.done() and time.time() < end:
+                time.sleep(0.02)
+            if not future.done():
+                future.cancel()
+                continue
+            result = future.result()
+            if result is None:
+                continue
+            pulses = dict(zip(result.ids, result.pulses))
+            if GRIPPER_ID in pulses:
+                return int(pulses[GRIPPER_ID])
+        return None
+
+    def holdingBlock(self):
+        """False if the gripper closed all the way, i.e. there is nothing between the fingers."""
+        pulse = self.gripperPulse()
+        if pulse is None:
+            self.get_logger().warn('Could not read the gripper servo; assuming it is holding the block.')
+            return True
+        holding = pulse <= GRIPPER_CLOSED - GRIPPER_EMPTY_MARGIN
+        self.get_logger().info(
+            f'Gripper stopped at pulse {pulse} (sent to {GRIPPER_CLOSED}): '
+            f'{"holding a block" if holding else "EMPTY, the grasp missed"}.')
+        return holding
+
+    def moveGripper(self, pulse):
+        self.gripperPublisher.publish(GripperControl(pulse=int(pulse), duration=GRIP_TIME))
+        time.sleep(GRIP_TIME + SETTLE_TIME)
         return True
-    
+
     def stow(self):
-        x,y,z = self.stowXyz
-        return self.moveTo(x, y, z , self.stowPitch)
-
-    # From here on im lowkey making up i hope it works
+        return self.moveTo(*STOW_XYZ, STOW_PITCH)
 
     def goalCallback(self, goalRequest):
         if self.busy:
             self.get_logger().warn('Arm is busy, rejecting goal.')
             return GoalResponse.REJECT
-
-        self.busy =  True
+        self.busy = True
         return GoalResponse.ACCEPT
 
     def cancelCallback(self, goalHandle):
         return CancelResponse.ACCEPT
 
     def runSteps(self, goalHandle, action, steps):
+        """Run (stage name, function) pairs in order, reporting each stage as feedback. Stops at the first failure."""
         result = action.Result()
         feedback = action.Feedback()
         try:
@@ -181,32 +154,31 @@ class IKNode(Node):
 
     def executePick(self, goalHandle):
         b = goalHandle.request.block
-        h, pitch = self.hoverOffset, self.graspPitch
-
-        # steps is a list of the different states the robot can be n and the corresponding functions assosciated with these states
-        steps = [
-            ('opening gripper',     lambda: self.moveGripper(self.gripperOpen)),
-            ('hovering over block', lambda: self.moveTo(b.x, b.y, b.z + h, pitch)),
-            ('descending',          lambda: self.moveTo(b.x,b.y,b.z, pitch)),
-            ('grasping' ,           lambda: self.moveGripper(self.gripperClosed)),
-            ('lifting',             lambda: self.moveTo(b.x, b.y, b.z + h, pitch)),
-            ('stowing' ,            self.stow),
-        ]
-
-        return self.runSteps(goalHandle, Pick, steps)
+        # Fingers square to the block's sides, wherever the arm is pointing
+        roll = gripRoll(b.x, b.y, goalHandle.request.yaw)
+        self.get_logger().info(
+            f'Pick at IK target ({b.x:.3f}, {b.y:.3f}, {b.z:.3f}), gripper roll {roll:.1f} deg.')
+        return self.runSteps(goalHandle, Pick, [
+            ('opening gripper', lambda: self.moveGripper(GRIPPER_OPEN)),
+            ('hovering over block', lambda: self.moveTo(b.x, b.y, b.z + HOVER, roll=roll)),
+            ('descending', lambda: self.moveTo(b.x, b.y, b.z, roll=roll)),
+            ('grasping', lambda: self.moveGripper(GRIPPER_CLOSED)),
+            ('lifting', lambda: self.moveTo(b.x, b.y, b.z + HOVER, roll=roll)),
+            # Fails the pick if the fingers closed on nothing, so the client can look again and retry
+            ('checking the grasp', self.holdingBlock),
+            ('stowing', self.stow),
+        ])
 
     def executePlace(self, goalHandle):
-        t = goalHandle.request.block
-        h, pitch = self.hoverOffset, self.graspPitch
+        t = goalHandle.request.block  # the place target; the action reuses the Pick goal layout
+        return self.runSteps(goalHandle, Place, [
+            ('moving over target', lambda: self.moveTo(t.x, t.y, t.z + HOVER)),
+            ('lowering', lambda: self.moveTo(t.x, t.y, t.z)),
+            ('releasing', lambda: self.moveGripper(GRIPPER_OPEN)),
+            ('retreating', lambda: self.moveTo(t.x, t.y, t.z + HOVER)),
+            ('stowing', self.stow),
+        ])
 
-        steps = [
-            ('moving over target', lambda: self.moveTo(t.x, t.y, t.z+h, pitch)),
-            ('lowering' ,           lambda: self.moveTo(t.x,t.y,t.z, pitch)),
-            ('releasing' ,          lambda: self.moveGripper(self.gripperOpen)),
-            ('retreating' ,         lambda: self.moveTo(t.x, t.y, t.z+h, pitch)),
-            ('stowing', self.stow)
-        ]
-        return self.runSteps(goalHandle, Place, steps)
 
 def main():
     rclpy.init()
@@ -218,8 +190,8 @@ def main():
     except KeyboardInterrupt:
         pass
     ik_node.destroy_node()
-
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

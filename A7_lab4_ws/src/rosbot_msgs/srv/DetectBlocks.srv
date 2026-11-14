@@ -1,3 +1,6 @@
 string[] colors
+# Height (m) of the underside of the blocks above the floor; 0 for blocks on the floor, level * block size for the
+# top block of a stack
+float64 height
 ---
 BlockDetection[] blocks

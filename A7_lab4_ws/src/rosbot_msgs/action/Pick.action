@@ -1,4 +1,7 @@
+# IK target for the tool point (m, arm frame) that puts the gripper on the block
 geometry_msgs/Point block
+# Direction of the block's edges in the arm frame (rad); the gripper is turned to match. 0 = square to the arm frame.
+float64 yaw
 ---
 bool success
 string message

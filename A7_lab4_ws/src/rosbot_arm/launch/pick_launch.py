@@ -1,4 +1,4 @@
-import os
+ quitimport os
 from ament_index_python.packages import get_package_share_directory
 
 import launch
@@ -20,7 +20,8 @@ def generate_launch_description():
     orbbec_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(orbbec_pkg_path, 'launch', 'dabai_dcw.launch.py')),
-        launch_arguments={'camera_name': 'depth_cam', 'depth_registration': 'true'}.items(),
+        # HW alignment puts depth on the same pixels as color
+        launch_arguments={'camera_name': 'depth_cam', 'depth_registration': 'true', 'align_mode': 'HW'}.items(),
         condition=IfCondition(LaunchConfiguration('start_camera')),
     )
 
@@ -28,12 +29,14 @@ def generate_launch_description():
         package='rosbot_arm',
         executable='arm_control',
         name='arm_control',
+        output='screen',
         condition=IfCondition(LaunchConfiguration('start_arm_control')))
 
     ik_node = Node(
         package='rosbot_arm',
         executable='ik_node',
-        name='ik_node')
+        name='ik_node',
+        output='screen')
 
     vision_node = Node(
         package='rosbot_vision',
@@ -48,13 +51,7 @@ def generate_launch_description():
         executable='pick_node',
         name='pick_node',
         output='screen',
-        parameters=[{
-            'look_xyz': [0.18, 0.0, 0.22],
-            'open_pulse': 600,
-            'close_pulse': 300,
-            'hover_offset': 0.08,
-            'lift_offset': 0.10,
-        }])
+        on_exit=launch.actions.Shutdown())
 
     return launch.LaunchDescription([
         start_camera_arg,

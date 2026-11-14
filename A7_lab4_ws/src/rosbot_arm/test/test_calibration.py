@@ -54,3 +54,33 @@ def test_save_and_load_round_trip(tmp_path):
     A2, b2, look = calibration.load(path)
     assert np.allclose(A, A2) and np.allclose(b, b2) and look == [0.14, 0.0, 0.2]
     assert calibration.load(str(tmp_path / 'missing.json')) is None
+
+
+def test_load_for_only_accepts_the_look_pose_it_was_measured_from(tmp_path):
+    path = str(tmp_path / 'cal.json')
+    assert calibration.loadFor([0.2, 0.0, 0.14], path)[0] is None
+    calibration.save(path, np.eye(2), np.zeros(2), [0.2, 0.0, 0.14], np.array([0.001]))
+    assert calibration.loadFor([0.2, 0.0, 0.14], path)[0] is not None
+    assert calibration.loadFor([0.2, 0.0, 0.20], path)[0] is None
+
+
+def test_old_format_file_is_not_used(tmp_path):
+    # Measured by the first calibrate_node, which aimed REACH_ERROR short of every point
+    path = str(tmp_path / 'cal.json')
+    with open(path, 'w') as f:
+        f.write('{"A": [[1, 0], [0, 1]], "b": [0, 0], "look_xyz": [0.2, 0.0, 0.14], "max_residual_m": 0.001}')
+    calib, status = calibration.loadFor([0.2, 0.0, 0.14], path)
+    assert calib is None and 'calibrate' in status
+
+
+def test_pick_target_without_calibration_takes_off_the_reach_error():
+    x, y, yaw = calibration.pickTarget(None, 0.20, 0.0, 0.3)
+    assert abs(x - (0.20 - calibration.REACH_ERROR)) < 1e-9 and y == 0.0 and yaw == 0.3
+    x, y, _ = calibration.pickTarget(None, 0.0, -0.20, 0.0)
+    assert abs(y + (0.20 - calibration.REACH_ERROR)) < 1e-9 and abs(x) < 1e-9
+
+
+def test_pick_target_with_calibration_is_the_measured_map():
+    A, b = np.array([[1.0, 0.0], [0.0, 1.0]]), np.array([-0.02, 0.01])
+    x, y, yaw = calibration.pickTarget((A, b), 0.25, 0.03, 0.2)
+    assert abs(x - 0.23) < 1e-9 and abs(y - 0.04) < 1e-9 and abs(yaw - 0.2) < 1e-9

@@ -1,23 +1,14 @@
 vision_node:
   ros__parameters:
-    # Measure the blocks and set to half their height. The full height is used to pick out each block's top face.
-    block_half_height: 0.0127
-    # Report every block at z = table_z + block_half_height (table height in the arm frame) instead of the measured z.
-    fixed_table_z: true
-    table_z: 0.0
-    # Raises every block's z (m) without moving the camera. Increase if the gripper drags on / pushes into the table.
-    grasp_z_offset: 0.015
-    # Use the table seen in the depth image for the camera tilt and height instead of TF
-    level_from_table: true
+    # The block size is armConfig.BLOCK_SIZE (rosbot_arm), shared with the stacker; nothing to set here.
 
     # Smallest color blob looked at (pixels). Block size is checked in meters afterwards.
     min_area: 60
     # Colored things whose top is higher than this above the table (gripper, robot parts) are not blocks
     max_block_height: 0.06
-    # Each detect_blocks call looks at num_frames new frames and reports a color seen in at least min_detections
-    # of them (0 = 2), at the median position.
+    # Each detect_blocks call looks at num_frames new frames and reports a color seen in at least 2 of them, at the
+    # median position.
     num_frames: 5
-    min_detections: 0
     frame_timeout: 3.0
 
     # HSV ranges, 6 numbers per range: h_lo, s_lo, v_lo, h_hi, s_hi, v_hi (OpenCV hue is 0-179).
@@ -30,3 +21,9 @@ vision_node:
     # Accept a block from color alone when depth does not show it standing above the table. Its position still comes
     # from the color pixels projected onto the table plane; only the "is it raised" check is skipped.
     require_raised: false
+
+    # When a requested block is not seen from where the arm is, back the arm up for a higher view and look again
+    raise_when_missing: true
+    # Every detect_blocks call saves its color / depth / annotated image and the camera pose it used here (the last
+    # 30 are kept). Look at a miss afterwards with: ros2 run rosbot_vision replay_capture. '' turns it off.
+    capture_dir: '~/.ros/vision_captures'

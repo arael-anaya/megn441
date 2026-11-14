@@ -29,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'vision_node = rosbot_vision.vision_node:main',
+            'replay_capture = rosbot_vision.replay:main',
         ],
     },
 )

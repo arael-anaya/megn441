@@ -34,7 +34,7 @@ def maskPixels(bgr, color, ranges=None):
     return int(np.count_nonzero(colorMask(bgr, color, ranges)))
 
 
-def block_candidates(bgr, color, minArea=150, ranges=None, maxCandidates=5):
+def block_candidates(bgr, color, minArea=150, ranges=None, maxCandidates=10):
     """Every blob of `color` at least minArea pixels big, biggest first, as (us, vs) arrays of its pixel coordinates.
 
     Holes inside a blob (glare on the top face) are filled in. The caller decides which blob is really the block.

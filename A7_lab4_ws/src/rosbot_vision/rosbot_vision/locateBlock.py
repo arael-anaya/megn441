@@ -73,8 +73,8 @@ def _check_size(xy, cameraPos, blockHeight, reasons):
     heightAbove = cameraPos[2] - blockHeight
     stretch = blockHeight * dist / heightAbove if heightAbove > 0.02 else 3 * blockHeight
     # a square block turned 45 deg spans 1.41 sides
-    maxAcross = 1.7 * blockHeight
-    maxAlong = 1.7 * blockHeight + 1.3 * stretch
+    maxAcross = 2.0 * blockHeight
+    maxAlong = 2.0 * blockHeight + 1.3 * stretch
     if min(extentAcross, extentAlong) < 0.5 * blockHeight or extentAcross > maxAcross or extentAlong > maxAlong:
         reasons.append(f'blob is {1000 * extentAcross:.0f} (across) x {1000 * extentAlong:.0f} (along) mm on the table, '
                        f'not a {1000 * blockHeight:.0f} mm block')

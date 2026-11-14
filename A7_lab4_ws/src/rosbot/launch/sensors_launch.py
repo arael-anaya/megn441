@@ -39,7 +39,9 @@ def generate_launch_description():
     orbbec_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(orbbec_pkg_path, 'launch', 'dabai_dcw.launch.py')),
-        launch_arguments={'depth_cam': 'depth_cam'}.items(),
+        # camera_name sets the topic prefix (/depth_cam/color/image_raw) the vision node subscribes to;
+        # HW alignment puts depth on the same pixels as color, which vision requires
+        launch_arguments={'camera_name': 'depth_cam', 'depth_registration': 'true', 'align_mode': 'HW'}.items(),
     )
 
 
