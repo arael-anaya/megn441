@@ -1,12 +1,13 @@
 import math
 
-from rosbot_arm.armConfig import gripRoll, towardBase
+from rosbot_arm.armConfig import ROLL_SIGN, gripRoll, towardBase
 
 
 def finger_axis_deg(x, y, rollDeg):
     """World direction the fingers close along, for a gripper pointing straight down. Joint 1 turns the gripper
-    with the arm's heading and joint 5 turns it back the other way (clockwise from above for a positive roll)."""
-    return math.degrees(math.atan2(y, x)) + 90.0 - rollDeg
+    with the arm's heading and joint 5 turns it by ROLL_SIGN * the roll command, counter-clockwise from above for a
+    positive ROLL_SIGN * roll."""
+    return math.degrees(math.atan2(y, x)) + 90.0 - ROLL_SIGN * rollDeg
 
 
 def test_fingers_line_up_with_the_block_edges_anywhere_in_reach():

@@ -22,7 +22,7 @@ TRAVEL_Z = 0.14
 # armConfig.REACH_ERROR) are the only corrections: everything else is geometry.
 STACK_LEAN = 0.01    # the gripper lands this much further out again for every block of height it is raised
 RELEASE_GAP = 0.01   # the first block is pushed this far (m) into the floor, later ones let go this far above the stack
-PLACE_LOWER = 0.003   # every block is let go this much (m) lower than that
+PLACE_LOWER = 0.008   # every block is let go this much (m) lower than that
 
 MOVE_TIME = 1.0
 SETTLE_TIME = 0.5

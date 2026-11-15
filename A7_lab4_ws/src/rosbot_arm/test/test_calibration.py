@@ -75,12 +75,14 @@ def test_old_format_file_is_not_used(tmp_path):
 
 def test_pick_target_without_calibration_takes_off_the_reach_error():
     x, y, yaw = calibration.pickTarget(None, 0.20, 0.0, 0.3)
-    assert abs(x - (0.20 - calibration.REACH_ERROR)) < 1e-9 and y == 0.0 and yaw == 0.3
+    dx, dy = calibration.PICK_OFFSET
+    assert abs(x - (0.20 - calibration.REACH_ERROR + dx)) < 1e-9 and abs(y - dy) < 1e-9 and yaw == 0.3
     x, y, _ = calibration.pickTarget(None, 0.0, -0.20, 0.0)
-    assert abs(y + (0.20 - calibration.REACH_ERROR)) < 1e-9 and abs(x) < 1e-9
+    assert abs(y + (0.20 - calibration.REACH_ERROR) - dy) < 1e-9 and abs(x - dx) < 1e-9
 
 
 def test_pick_target_with_calibration_is_the_measured_map():
     A, b = np.array([[1.0, 0.0], [0.0, 1.0]]), np.array([-0.02, 0.01])
     x, y, yaw = calibration.pickTarget((A, b), 0.25, 0.03, 0.2)
-    assert abs(x - 0.23) < 1e-9 and abs(y - 0.04) < 1e-9 and abs(yaw - 0.2) < 1e-9
+    dx, dy = calibration.PICK_OFFSET
+    assert abs(x - (0.23 + dx)) < 1e-9 and abs(y - (0.04 + dy)) < 1e-9 and abs(yaw - 0.2) < 1e-9

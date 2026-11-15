@@ -45,6 +45,13 @@ CAMERA_AHEAD = 0.05 + CAMERA_OFFSET[0]
 # seen from above for a positive roll (opposite to joint 1), so a block turned counter-clockwise needs a negative
 # roll. Flip to +1.0 if the fingers end up turned the wrong way on a block sitting at an angle.
 BLOCK_YAW_SIGN = -1.0
+# Direction joint 5 turns for a positive roll command. -1 after the first test on the robot: the roll worked out from
+# the heading and the block's yaw came out turned the wrong way, so the whole joint 5 command is negated.
+ROLL_SIGN = -1.0
+
+# Added to every pick target (m, arm frame x forward, y left), on top of the camera reading and the reach correction.
+# Half a block back: the gripper was closing half a block too far forward.
+PICK_OFFSET = (-BLOCK_SIZE / 2, 0.0)
 
 
 def towardBase(x, y, distance):
@@ -60,9 +67,9 @@ def gripRoll(x, y, blockYawRad):
     """Joint 5 angle (deg) that lines the fingers up with the sides of a block at (x, y) whose edges point along
     blockYawRad in the arm frame.
 
-    Joint 1 swings the whole gripper round by the arm's heading and joint 5 turns the other way, so the heading is
-    added to keep the fingers square to the arm frame, then the block's own yaw is taken off. A square block looks
-    the same every 90 degrees, so the result is wrapped into [-45, 45).
+    Joint 1 swings the whole gripper round by the arm's heading, so joint 5 has to take that out again and then
+    turn to the block's own yaw (ROLL_SIGN and BLOCK_YAW_SIGN are the measured signs). A square block looks the same
+    every 90 degrees, so the result is wrapped into [-45, 45).
     """
-    roll = math.degrees(math.atan2(y, x)) + BLOCK_YAW_SIGN * math.degrees(blockYawRad)
+    roll = ROLL_SIGN * (math.degrees(math.atan2(y, x)) + BLOCK_YAW_SIGN * math.degrees(blockYawRad))
     return ((roll + 45.0) % 90.0) - 45.0

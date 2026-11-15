@@ -11,7 +11,7 @@ import os
 
 import numpy as np
 
-from rosbot_arm.armConfig import REACH_ERROR, towardBase
+from rosbot_arm.armConfig import PICK_OFFSET, REACH_ERROR, towardBase
 
 CALIBRATION_FILE = '~/.ros/block_calibration.json'
 # What the saved map produces: the IK target to send for a block seen at a camera position. Files without this were
@@ -60,12 +60,13 @@ def pickTarget(calib, x, y, yawRad):
     """IK target (x, y) and block yaw for grabbing a block the camera reports at (x, y, yawRad).
 
     With a calibration (A, b) that is the measured map. Without one the camera position is trusted and only the
-    arm's known overreach is taken off.
+    arm's known overreach is taken off. PICK_OFFSET is added either way.
     """
     if calib is not None:
-        return apply(*calib, x, y, yawRad)
-    tx, ty = towardBase(x, y, REACH_ERROR)
-    return tx, ty, yawRad
+        tx, ty, yawRad = apply(*calib, x, y, yawRad)
+    else:
+        tx, ty = towardBase(x, y, REACH_ERROR)
+    return tx + PICK_OFFSET[0], ty + PICK_OFFSET[1], yawRad
 
 
 def save(path, A, b, lookXyz, residuals):
