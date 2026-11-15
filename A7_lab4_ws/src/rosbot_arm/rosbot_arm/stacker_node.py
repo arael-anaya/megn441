@@ -12,21 +12,18 @@ from rosbot_arm import calibration
 from rosbot_arm.armConfig import (BLOCK_SIZE, CAMERA_AHEAD, GRIPPER_OPEN, GRIPPER_CLOSED, LOOK_XYZ, GRASP_Z,
                                   REACH_ERROR, towardBase, gripRoll)
 
-STACK_ORDER = ['red', 'green', 'blue']  # bottom of the stack first
+STACK_ORDER = ['red', 'green', 'blue']
 STACK_XY = (0.0, -0.20)
-HOVER = 0.06  # travel height above every pick and place
-# Tool height (m) to carry a block at between the pick and the stack: clear of the wheel the arm swings over
+HOVER = 0.06
 TRAVEL_Z = 0.14
 
-# Where the real arm lands compared with the IK model, measured on the robot. These numbers (plus grasp_z and
-# armConfig.REACH_ERROR) are the only corrections: everything else is geometry.
-STACK_LEAN = 0.01    # the gripper lands this much further out again for every block of height it is raised
-RELEASE_GAP = 0.01   # the first block is pushed this far (m) into the floor, later ones let go this far above the stack
-PLACE_LOWER = 0.008   # every block is let go this much (m) lower than that
+STACK_LEAN = 0.01
+RELEASE_GAP = 0.01
+PLACE_LOWER = 0.008
 
 MOVE_TIME = 1.0
 SETTLE_TIME = 0.5
-LOOK_SETTLE = 1.0  # extra wait at the look pose so arm_state_publisher (5 Hz servo reads) and TF catch up
+LOOK_SETTLE = 1.0
 DETECT_ATTEMPTS = 10
 
 
@@ -40,16 +37,12 @@ class StackerNode(Node):
 
         self.declare_parameter('look_xyz', LOOK_XYZ)
         self.declare_parameter('look_duration', 1.25)
-        # Tool point height (m) the gripper closes at. Blocks always sit on the floor, so it is fixed rather than
-        # taken from the camera. See armConfig.GRASP_Z: the fingertips must stay just clear of the floor.
         self.declare_parameter('grasp_z', GRASP_Z)
 
         self.lookXyz = [float(v) for v in self.get_parameter('look_xyz').value]
         self.lookDuration = float(self.get_parameter('look_duration').value)
         self.graspZ = float(self.get_parameter('grasp_z').value)
 
-        # Camera -> IK target correction measured by calibrate_node. calibrate_node itself turns every correction
-        # off: it needs to see where the camera puts the block.
         self.correctDetections = applyCalibration
         self.calibration = None
         if applyCalibration:
@@ -57,7 +50,6 @@ class StackerNode(Node):
             (self.get_logger().info if self.calibration else self.get_logger().warn)(status)
 
         self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks')
-        # Where the stack stands; updated from the camera after every block placed on it
         self.stackXy = STACK_XY
 
         self.targetPosePublisher = self.create_publisher(TargetPose, 'inverse_topic', 10)
@@ -141,7 +133,6 @@ class StackerNode(Node):
         self.get_logger().info(f'Arm -> ({x:.3f}, {y:.3f}, {z:.3f}) roll {rollDeg:.0f}')
         self.targetPosePublisher.publish(msg)
 
-        # The IK node answers right away; give it a moment, then stop if it rejected the pose
         end = time.time() + 2.0
         while rclpy.ok() and self.ikResult is None and time.time() < end:
             rclpy.spin_once(self, timeout_sec=0.05)
@@ -175,7 +166,6 @@ class StackerNode(Node):
         """Right after placing: where the stack really is, (x, y), from the block just put on top (`level` blocks
         were under it), seen from above with the gripper empty. Blocks drift as they are placed; the next one goes
         where this one ended up. Keeps the old position if it cannot be seen."""
-        # Tool pulled back so the camera, which sits further out along the arm, is right above the stack
         x, y = towardBase(*STACK_XY, CAMERA_AHEAD)
         self.sendPose(x, y, self.lookXyz[2] + (level + 1) * BLOCK_SIZE, 0.0, self.lookDuration)
         self.wait(LOOK_SETTLE)
@@ -202,7 +192,6 @@ class StackerNode(Node):
         self.moveGripper(GRIPPER_OPEN)
         self.touchDown(block.x, block.y, self.graspZ, pickRoll, lambda: self.moveGripper(GRIPPER_CLOSED),
                        move=self.moveRaw)
-        # Straight up first, then across: sweeping over at hover height drags the block through the wheel
         self.moveRaw(block.x, block.y, travelZ, pickRoll)
         self.moveArm(placeX, placeY, travelZ, 0.0)
         self.touchDown(placeX, placeY, placeZ, 0.0, lambda: self.moveGripper(GRIPPER_OPEN))
@@ -217,7 +206,6 @@ class StackerNode(Node):
                 self.get_logger().warn(f'{color} not seen again; using where it was first seen.')
             return first
         if first is not None and math.hypot(new.x - first.x, new.y - first.y) > 0.05:
-            # Blocks do not teleport; a jump this big is a bad camera pose, not a moved block
             self.get_logger().warn(
                 f'{color} appears to have moved {100 * math.hypot(new.x - first.x, new.y - first.y):.0f} cm '
                 f'since the first look; ignoring the new reading and using the first.')

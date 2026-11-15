@@ -17,24 +17,20 @@ import numpy as np
 
 from rosbot_arm.armConfig import CAMERA_OFFSET
 
-# Heights along the arm (m): floor -> joint 1 flange, then joint to joint
 JOINT1_Z = 0.05 + 0.0654867643253843 + 0.0774026880954513
 JOINT2_Z = 0.0338648012164686
 JOINT3_Z = 0.129416446394797
 JOINT4_Z = 0.129444631186569
 
-# link4 -> camera_connect_link -> depth_cam_link
 CAMERA_CONNECT_XYZ = np.array([-0.0507060266977644, 0.0, 0.0505384841187764])
 CAMERA_CONNECT_YAW = -math.pi / 2
 CAMERA_LINK_Z = 0.014475
 CAMERA_LINK_RPY = (math.pi, -math.pi / 2, -math.pi / 2)
 
-# depth_cam_link (x out of the lens, y left, z up) -> optical frame, when the camera driver's own value is not known
 OPTICAL_IN_LINK = np.array([[0.0, 0.0, 1.0],
                             [-1.0, 0.0, 0.0],
                             [0.0, -1.0, 0.0]])
 
-# arm_control clamps these servos before sending them, so the arm never goes past them
 PULSE_LIMITS = {2: (125, 775)}
 ARM_JOINTS = (1, 2, 3, 4, 5)
 
@@ -77,7 +73,6 @@ def camera_link_pose(servoDeg):
         p = p + R @ np.array([0.0, 0.0, length])
         R = R @ rot_y(-angle)
     p = p + R @ CAMERA_CONNECT_XYZ
-    # The URDF puts the camera a little short and to the right of where it really is, in the arm's turning frame
     p = p + rot_z(j[0]) @ np.array([CAMERA_OFFSET[0], CAMERA_OFFSET[1], 0.0])
     R = R @ rot_z(CAMERA_CONNECT_YAW)
     p = p + R @ np.array([0.0, 0.0, CAMERA_LINK_Z])

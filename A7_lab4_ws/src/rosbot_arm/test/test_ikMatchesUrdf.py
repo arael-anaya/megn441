@@ -8,13 +8,12 @@ import numpy as np
 
 from rosbot_arm import inverseKinematics as ik
 
-JOINT1_XYZ = (0.0251328065010765, 0.0, ik.l0 - 0.0338648012164686)  # base_footprint -> joint1, via the IK base height
+JOINT1_XYZ = (0.0251328065010765, 0.0, ik.l0 - 0.0338648012164686)
 JOINT2_Z = 0.0338648012164686
 JOINT3_Z = 0.129416446394797
 JOINT4_Z = 0.129444631186569
 JOINT5_Z = 0.0544833339503674
 
-# arm_state_publisher: urdf = (-j1, -j2, -j3, joint4_sign * j4, -j5)
 JOINT4_SIGN = -1.0
 
 
@@ -42,6 +41,5 @@ def test_ik_target_is_where_the_urdf_puts_the_tool():
         angles = ik.solveIK(x, y, z, 0.0, -90.0, 1)
         assert angles is not None
         tool, axis = urdf_tool(angles)
-        # URDF links are 0.6 mm shorter than the IK's 0.130 m, so allow a couple of millimetres
         assert np.allclose(tool, [x, y, z], atol=0.003), (x, y, z, tool)
         assert np.allclose(axis, [0, 0, -1], atol=0.01), axis

@@ -8,10 +8,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
-# ros2 launch rosbot_nav sensors_nav2_rviz_launch.py \
-#   params_file:=/home/<user>/<your_ws>/src/rosbot_nav/params/nav2_params.yaml
 
-# rsync -ruvl A7_lab4_ws ubuntu@192.168.149.1:~/
 
 
 def generate_launch_description():
@@ -51,7 +48,6 @@ def generate_launch_description():
             'map': map_yaml,
             'params_file': params_file,
             'use_sim_time': use_sim_time,
-            # The camera launch leaks log_level='none' into this scope; override it.
             'log_level': 'info',
         }.items(),
     )
@@ -60,7 +56,6 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(nav_pkg_path, 'launch', 'rviz_launch.py')),
     )
-    # I think we need a delay before we start the other packages so the sensors are properly set up
     delayed_nav2 = TimerAction(period=5.0, actions=[nav2_launch])
     delayed_rviz = TimerAction(period=8.0, actions=[rviz_launch])
 

@@ -27,7 +27,6 @@ def render(rotation, translation, blocks, patches=()):
     raysCam = np.stack([(us - CX) / FX, (vs - CY) / FY, np.ones_like(us, float)], axis=-1).reshape(-1, 3)
     raysArm = raysCam @ rotation.T
 
-    # table hit, as distance along the camera-z-normalised ray (= optical depth)
     tHit = -translation[2] / raysArm[:, 2]
     tHit[raysArm[:, 2] >= 0] = np.inf
     bgr = np.tile(np.array(TABLE_BGR, np.uint8), (len(tHit), 1))
@@ -77,7 +76,6 @@ def test_oblique_view_lands_on_block_centre():
 def test_misregistered_depth_does_not_push_target_behind_block():
     rotation, translation = camera_pose(50)
     bgr, depth = render(rotation, translation, [(0.25, 0.0, 0, (0, 0, 255))])
-    # Depth that is a few pixels off from color, the way a registered depth camera often is
     for shift in (-4, 4):
         det = locate(bgr, np.roll(depth, shift, axis=0), rotation, translation)
         assert det is not None
@@ -86,7 +84,6 @@ def test_misregistered_depth_does_not_push_target_behind_block():
 
 def test_flat_colored_patch_on_table_is_ignored():
     rotation, translation = camera_pose(50)
-    # A red square of paper bigger than the block, and the real block next to it
     bgr, depth = render(rotation, translation, [(0.22, 0.05, 0, (0, 0, 255))],
                         patches=[(0.28, -0.04, 0.03, (0, 0, 255))])
     det = locate(bgr, depth, rotation, translation)
@@ -124,8 +121,6 @@ def test_finds_each_color_and_misses_absent_one():
 
 
 def test_distant_block_with_stretched_side_face_is_found():
-    # Seen from far away at a shallow angle the camera-facing side lands on the table as a long streak behind
-    # the block (30 x 94 mm at 0.8 m); that is still one block, not an oversized blob.
     rotation, translation = camera_pose(30, (0.05, 0.0, 0.30))
     for dist in (0.5, 0.8, 1.1):
         bgr, depth = render(rotation, translation, [(dist, 0.02, 10, (0, 0, 220))])
@@ -140,7 +135,6 @@ def test_floor_fit_prefers_floor_over_a_wall_in_view():
     depthM = depth.astype(float) * 0.001
     vs, us = np.mgrid[0:H, 0:W]
     raysArm = np.stack([(us - CX) / FX, (vs - CY) / FY, np.ones_like(us, float)], axis=-1).reshape(-1, 3) @ rotation.T
-    # A wall 0.7 m ahead fills the whole top half of the image, with more points than the floor below it
     wall = (0.7 - translation[0]) / raysArm[:, 0]
     top = (np.arange(H * W) // W) < 300
     depthM = depthM.reshape(-1)

@@ -72,7 +72,6 @@ def _check_size(xy, cameraPos, blockHeight, reasons):
     extentAcross = float(np.ptp(xy @ across))
     heightAbove = cameraPos[2] - blockHeight
     stretch = blockHeight * dist / heightAbove if heightAbove > 0.02 else 3 * blockHeight
-    # a square block turned 45 deg spans 1.41 sides
     maxAcross = 2.0 * blockHeight
     maxAlong = 2.0 * blockHeight + 1.3 * stretch
     if min(extentAcross, extentAlong) < 0.5 * blockHeight or extentAcross > maxAcross or extentAlong > maxAlong:
@@ -87,7 +86,6 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
     fx, fy, cx, cy = intrinsics
     h, w = depthM.shape[:2]
     if us.min() <= 1 or vs.min() <= 1 or us.max() >= w - 2 or vs.max() >= h - 2:
-        # The image edge would be taken for the block's edge and the position would be off by up to a block
         reasons.append('blob is cut off by the image edge')
         return None
     rays = pixel_rays(us, vs, fx, fy, cx, cy)
@@ -95,7 +93,6 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
     valid = (z > 0.05) & (z < 3.0)
 
     if plane is None:
-        # No table plane: best we can do is the median of the block surface seen in depth
         if np.count_nonzero(valid) < 10:
             reasons.append('no table plane and no depth on the blob')
             return None
@@ -123,7 +120,6 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
                            f'too tall; median height {1000 * np.median(heights):.0f} mm)')
             if requireRaised:
                 return None
-    # Not raised (or no depth on the blob): go on the color blob alone
     if raised:
         top = (heights > 0.7 * blockHeight) & (heights < maxHeight)
         pick = top if np.count_nonzero(top) >= 15 else elevated
@@ -132,8 +128,6 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
         if len(topPts) >= 10:
             topXy = (topPts @ rotation.T + translation)[:, :2]
 
-        # Drop blob pixels that depth puts on the table (a same-colored patch touching the block would stretch it),
-        # except right next to the raised pixels, where depth may just be a few pixels misaligned with color
         raisedUs, raisedVs = _largest_component(us[valid][elevated], vs[valid][elevated], depthM.shape[:2])
         near = np.zeros(depthM.shape[:2], np.uint8)
         near[raisedVs, raisedUs] = 255
@@ -154,11 +148,9 @@ def _locate_candidate(us, vs, depthM, intrinsics, plane, rotation, translation, 
     sides = _check_size(blobXy, translation, blockHeight, reasons)
     if sides is None:
         return None
-    # The top face alone gives the cleanest edge directions; the whole blob is skewed by the side faces
     yawDeg = _rect_yaw(topXy)[0] if topXy is not None and len(topXy) >= 30 else blobYaw
 
     x, y = _fit_square(blobXy, yawDeg, blockHeight, translation[:2])
-    # Points are on the top-face plane; the block centre is half a block below it
     zArm = float(np.median(armPts[:, 2]) - blockHeight / 2)
     return {
         'x': float(x), 'y': float(y), 'z': zArm, 'yaw_deg': yawDeg,

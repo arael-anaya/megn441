@@ -73,7 +73,6 @@ def fit_table_plane(depth, fx, fy, cx, cy, depthScale, step=8, iterations=300, t
         return None
     n, dist = best
 
-    # The 3-point plane is only as good as those 3 points; fit all of its inliers for a steadier height and tilt
     inliers = pts[np.abs(pts @ n - dist) < tol]
     centroid = inliers.mean(axis=0)
     _, _, vt = np.linalg.svd(inliers - centroid, full_matrices=False)

@@ -27,10 +27,8 @@ def makeNodes(context):
     print(f'[stack_launch] look pose (IK target, gripper down) {lookXyz}, '
           f'grasp_z {LaunchConfiguration("grasp_z").perform(context)}')
 
-    # mode:=calibrate measures the camera -> arm correction instead of stacking
     executable = 'calibrate_node' if LaunchConfiguration('mode').perform(context) == 'calibrate' else 'stacker_node'
 
-    # Give the camera and the other nodes a few seconds to come up before the arm starts moving
     stacker_node = TimerAction(
         period=5.0,
         actions=[Node(
@@ -48,9 +46,6 @@ def makeNodes(context):
 def makeVision(context):
     """Vision node with the shared vision_params.yaml."""
     visionParams = os.path.join(get_package_share_directory('rosbot_vision'), 'config', 'vision_params.yaml')
-    # raise_when_missing (backing the arm up for a higher view) applies in calibrate mode too: blocks close to the
-    # base are out of view from the look pose, and the camera pose is computed from the commanded arm pose, so
-    # positions seen from the raised view are as valid as from the look pose.
     return [Node(
         package='rosbot_vision', executable='vision_node', name='vision_node', output='screen',
         parameters=[visionParams])]
@@ -59,9 +54,6 @@ def makeVision(context):
 def generate_launch_description():
     orbbec_pkg_path = get_package_share_directory('orbbec_camera')
 
-    # Look pose as an IK target for the tool point, gripper (and camera) pointing straight down. The camera sits about
-    # 5 cm ahead of and 0.11 m above the tool point. Edit on the command line, e.g.
-    #   ros2 launch rosbot_arm stack_launch.py look_x:=0.22 look_z:=0.15
     args = [
         DeclareLaunchArgument('start_camera', default_value='true'),
         DeclareLaunchArgument('mode', default_value='stack', description='stack, or calibrate to measure the '
@@ -78,7 +70,6 @@ def generate_launch_description():
     camera = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(orbbec_pkg_path, 'launch', 'dabai_dcw.launch.py')),
-        # HW alignment puts depth on the same pixels as color (the course block_detector launch uses it too)
         launch_arguments={'camera_name': 'depth_cam', 'depth_registration': 'true', 'align_mode': 'HW'}.items(),
         condition=IfCondition(LaunchConfiguration('start_camera')))
 
@@ -88,9 +79,6 @@ def generate_launch_description():
     ik_node = Node(
         package='rosbot_arm', executable='ik_node', name='ik_node', output='screen')
 
-    # No robot_state_publisher / arm_state_publisher: the vision node gets the camera pose from the servo commands
-    # ik_node sends (forward_topic). The robot's own bringup already publishes joint states and TF for the arm, and
-    # a second source of either only makes them fight.
 
     return launch.LaunchDescription(args + [
         camera,

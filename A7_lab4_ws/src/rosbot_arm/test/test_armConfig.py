@@ -15,7 +15,6 @@ def test_fingers_line_up_with_the_block_edges_anywhere_in_reach():
         for yawDeg in (-40, -20, 0, 15, 30, 44):
             roll = gripRoll(x, y, math.radians(yawDeg))
             assert -45.0 <= roll < 45.0
-            # a square block: the fingers may be along either pair of edges
             off = (finger_axis_deg(x, y, roll) - yawDeg + 45.0) % 90.0 - 45.0
             assert abs(off) < 1e-6, (x, y, yawDeg, roll, off)
 

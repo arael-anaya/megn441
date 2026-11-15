@@ -5,7 +5,6 @@ from rosbot_arm import inverseKinematics as ik
 
 def forward(angles):
     """Planar forward kinematics for joints 1-4; returns (r, z, pitch) of the gripper tip."""
-    # solveIK reports joint 2 from straight up (servo zero); planar FK measures it from horizontal
     a2, a3, a4 = np.deg2rad(angles[1] + 90.0), np.deg2rad(angles[2]), np.deg2rad(angles[3])
     r = (ik.l1 * np.cos(a2) + ik.l2 * np.cos(a2 + a3)
          + (ik.l3 + ik.tool_link) * np.cos(a2 + a3 + a4))

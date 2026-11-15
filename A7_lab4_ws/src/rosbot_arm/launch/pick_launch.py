@@ -20,7 +20,6 @@ def generate_launch_description():
     orbbec_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(orbbec_pkg_path, 'launch', 'dabai_dcw.launch.py')),
-        # HW alignment puts depth on the same pixels as color
         launch_arguments={'camera_name': 'depth_cam', 'depth_registration': 'true', 'align_mode': 'HW'}.items(),
         condition=IfCondition(LaunchConfiguration('start_camera')),
     )

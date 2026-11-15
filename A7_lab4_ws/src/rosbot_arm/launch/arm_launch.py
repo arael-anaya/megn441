@@ -19,8 +19,6 @@ def generate_launch_description():
                 name='ik_node')
 
 
-    # Your final returned LaunchDescription includes 
-    # a list of all of the nodes, launch files, etc.
     return launch.LaunchDescription([
         arm_control_node,
         ik_node,
@@ -28,7 +26,6 @@ def generate_launch_description():
 
 
 if __name__ == '__main__':
-    # Create a LaunchDescription object
     ld = generate_launch_description()
 
     ls = launch.LaunchService()

@@ -15,7 +15,6 @@ def generate_launch_description():
 
 
 if __name__ == '__main__':
-    # Create a LaunchDescription object
     ld = generate_launch_description()
 
     ls = launch.LaunchService()

@@ -16,8 +16,8 @@ from rosbot_arm.armConfig import (GRIPPER_ID, GRIPPER_OPEN, GRIPPER_CLOSED, GRIP
                                   STOW_PITCH, gripRoll)
 
 JOINT_IDS = [1, 2, 3, 4, 5]
-GRASP_PITCH = -90.0  # gripper straight down
-HOVER = 0.05         # travel height above a pick or place
+GRASP_PITCH = -90.0
+HOVER = 0.05
 MOVE_TIME = 2.0
 GRIP_TIME = 1.0
 SETTLE_TIME = 0.5
@@ -33,9 +33,7 @@ class IKNode(Node):
         self.gripperPublisher = self.create_publisher(GripperControl, 'gripper_topic', 10)
 
         self.busy = False
-        # Reentrant so a cancel request gets through while a pick or place is sleeping between steps
         self.cbGroup = ReentrantCallbackGroup()
-        # arm_control reads the servos; used to check that the gripper closed on something
         self.getAnglesClient = self.create_client(GetAngles, 'get_angles', callback_group=self.cbGroup)
         self.pickServer = ActionServer(
             self, Pick, 'pick',
@@ -52,8 +50,6 @@ class IKNode(Node):
 
     def sendPose(self, pose):
         """Send the servos to a TargetPose. Returns False, sending nothing, if it cannot be reached."""
-        # Straight down (-90) puts the wrist ~0.17 m above the tip, which leaves low targets beyond ~0.15 m
-        # out of reach. If the requested pitch fails, tilt the gripper toward horizontal until it fits.
         for pitch in [pose.pitch] + [p for p in range(-80, -29, 5) if p > pose.pitch]:
             pulses = inverseKinematics.solvePulses(pose.x, pose.y, pose.z, pose.roll, pitch)
             if pulses is not None:
@@ -154,7 +150,6 @@ class IKNode(Node):
 
     def executePick(self, goalHandle):
         b = goalHandle.request.block
-        # Fingers square to the block's sides, wherever the arm is pointing
         roll = gripRoll(b.x, b.y, goalHandle.request.yaw)
         self.get_logger().info(
             f'Pick at IK target ({b.x:.3f}, {b.y:.3f}, {b.z:.3f}), gripper roll {roll:.1f} deg.')
@@ -164,13 +159,12 @@ class IKNode(Node):
             ('descending', lambda: self.moveTo(b.x, b.y, b.z, roll=roll)),
             ('grasping', lambda: self.moveGripper(GRIPPER_CLOSED)),
             ('lifting', lambda: self.moveTo(b.x, b.y, b.z + HOVER, roll=roll)),
-            # Fails the pick if the fingers closed on nothing, so the client can look again and retry
             ('checking the grasp', self.holdingBlock),
             ('stowing', self.stow),
         ])
 
     def executePlace(self, goalHandle):
-        t = goalHandle.request.block  # the place target; the action reuses the Pick goal layout
+        t = goalHandle.request.block
         return self.runSteps(goalHandle, Place, [
             ('moving over target', lambda: self.moveTo(t.x, t.y, t.z + HOVER)),
             ('lowering', lambda: self.moveTo(t.x, t.y, t.z)),

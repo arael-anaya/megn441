@@ -17,26 +17,18 @@ from rosbot_arm.armConfig import GRIPPER_OPEN, GRIPPER_CLOSED
 from rosbot_arm.stacker_node import StackerNode, UnreachableError
 
 
-# IK targets (m) to set the block down at; keep them inside the look pose's view. Gripper-down picks reach about
-# 0.25 m from joint 1, so nothing past that. The first point is where the arm waits for the block to be put in, so
-# it is the far, centre one.
 POINTS = [(0.23, 0.0), (0.23, -0.05), (0.23, 0.05),
           (0.20, -0.05), (0.20, 0.0), (0.20, 0.05),
           (0.17, -0.05), (0.17, 0.0), (0.17, 0.05)]
 COLOR = 'red'
 PLACE_BLOCK_TIME = 10.0
-# A set-down block should be seen within this many metres of where it was put (the camera error is a few cm). More
-# than that means the block was dropped or bumped, or the camera saw something else: stop the run.
 MAX_ERROR = 0.08
-# Refuse to save a fit whose worst point is further off than this (m)
 MAX_RESIDUAL = 0.015
 
 
 class CalibrateNode(StackerNode):
     def __init__(self):
         super().__init__('calibrate_node', applyCalibration=False)
-        # True: the arm never grabs the block. At every point it goes down with the gripper open and waits while you
-        # slide the block in between the fingers, then backs off to look. Works even if the grasp itself is unreliable.
         self.declare_parameter('calib_manual', False)
         self.manual = self.get_parameter('calib_manual').value
 
@@ -59,7 +51,6 @@ class CalibrateNode(StackerNode):
         def release():
             self.moveGripper(GRIPPER_OPEN)
 
-        # Wait down at grab height with the gripper open, so the block just slides in between the fingers
         x0, y0 = POINTS[0]
 
         def loadBlock():

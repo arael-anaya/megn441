@@ -21,17 +21,15 @@ def look_angles(x, y, z):
 
 def test_look_pose_puts_the_camera_above_the_floor_looking_down():
     rotation, translation = cameraModel.optical_pose(look_angles(*LOOK))
-    # ahead of the tool point (plus the measured camera offset) and 0.11 m above it
     assert np.allclose(translation, [0.25 + CAMERA_OFFSET[0], CAMERA_OFFSET[1], 0.247], atol=0.004), translation
-    assert np.allclose(rotation[:, 2], [0, 0, -1], atol=0.02), rotation[:, 2]   # lens points at the floor
-    assert np.allclose(rotation[:, 0], [0, -1, 0], atol=0.02), rotation[:, 0]   # image right = arm -y
-    assert np.allclose(rotation[:, 1], [-1, 0, 0], atol=0.02), rotation[:, 1]   # image down = toward the robot
+    assert np.allclose(rotation[:, 2], [0, 0, -1], atol=0.02), rotation[:, 2]
+    assert np.allclose(rotation[:, 0], [0, -1, 0], atol=0.02), rotation[:, 0]
+    assert np.allclose(rotation[:, 1], [-1, 0, 0], atol=0.02), rotation[:, 1]
 
 
 def test_camera_turns_with_joint_1():
     rotation, translation = cameraModel.optical_pose(look_angles(0.16, 0.12, 0.14))
     heading = math.atan2(0.12, 0.16)
-    # In the arm's own frame the camera is where it was at heading 0, whichever way the arm turns
     c, s = math.cos(heading), math.sin(heading)
     ahead = translation[0] * c + translation[1] * s
     left = -translation[0] * s + translation[1] * c
@@ -39,20 +37,16 @@ def test_camera_turns_with_joint_1():
 
 
 def test_tool_point_from_the_same_chain_is_the_ik_target():
-    # Same joints the camera hangs off: if these disagreed with the IK, the camera would be misplaced too
     for x, y, z in [(0.20, 0.0, 0.14), (0.22, 0.05, 0.0), (0.15, -0.10, 0.10)]:
         angles = look_angles(x, y, z)
         R, p = cameraModel.camera_link_pose(angles)
-        # the measured camera offset is not part of the URDF chain
         heading = math.radians(angles[0])
         p = p - cameraModel.rot_z(heading) @ [CAMERA_OFFSET[0], CAMERA_OFFSET[1], 0.0]
-        # depth_cam_link back to link 4's tip: undo the mount, then go down the gripper
         link4 = R @ cameraModel.rot_x(-cameraModel.CAMERA_LINK_RPY[0]) @ cameraModel.rot_y(-cameraModel.CAMERA_LINK_RPY[1]) \
             @ cameraModel.rot_z(-cameraModel.CAMERA_LINK_RPY[2]) @ cameraModel.rot_z(-cameraModel.CAMERA_CONNECT_YAW)
         origin4 = p - link4 @ cameraModel.rot_z(cameraModel.CAMERA_CONNECT_YAW) @ [0, 0, cameraModel.CAMERA_LINK_Z] \
             - link4 @ cameraModel.CAMERA_CONNECT_XYZ
         tool = origin4 + link4 @ [0, 0, ik.l3 + ik.tool_link]
-        # 0.24 deg per pulse of rounding and URDF links 0.6 mm shorter than the IK's: a few millimetres
         assert np.allclose(tool, [x, y, z], atol=0.004), (x, y, z, tool)
 
 
@@ -71,7 +65,6 @@ def test_blocks_are_located_from_color_and_the_model_alone():
 def test_driver_extrinsic_moves_the_lens_sideways():
     angles = look_angles(*LOOK)
     _, nominal = cameraModel.optical_pose(angles)
-    # color sensor 2 cm to the left of the housing origin (link y)
     _, shifted = cameraModel.optical_pose(angles, (cameraModel.OPTICAL_IN_LINK, [0.0, 0.02, 0.0]))
     assert np.allclose(shifted - nominal, [0.0, 0.02, 0.0], atol=1e-3), shifted - nominal
 

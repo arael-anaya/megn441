@@ -18,16 +18,15 @@ def camera_error(points, angleDeg, scale, shift, mirror=False):
 
 
 @pytest.mark.parametrize('angle, scale, shift, mirror', [
-    (6.0, 1.0, (0.0, 0.0), False),        # camera yaw: error grows with distance, different for every block
-    (0.0, 0.9, (0.02, -0.01), False),     # wrong camera height / intrinsics plus a shift
-    (-3.0, 1.05, (0.01, 0.03), True),     # mirrored image axis
+    (6.0, 1.0, (0.0, 0.0), False),
+    (0.0, 0.9, (0.02, -0.01), False),
+    (-3.0, 1.05, (0.01, 0.03), True),
 ])
 def test_fit_undoes_position_dependent_error(angle, scale, shift, mirror):
     detected = camera_error(GRID, angle, scale, shift, mirror)
-    detected += np.random.default_rng(0).normal(0, 0.001, detected.shape)  # 1 mm detection noise
+    detected += np.random.default_rng(0).normal(0, 0.001, detected.shape)
     A, b, residuals = calibration.fit_affine(detected, GRID)
     assert residuals.max() < 0.004
-    # A new block anywhere in the area lands where the arm has to go
     for true in [(0.20, 0.03), (0.24, -0.04)]:
         seen = camera_error([true], angle, scale, shift, mirror)[0]
         x, y, _ = calibration.apply(A, b, seen[0], seen[1], 0.0)
@@ -65,7 +64,6 @@ def test_load_for_only_accepts_the_look_pose_it_was_measured_from(tmp_path):
 
 
 def test_old_format_file_is_not_used(tmp_path):
-    # Measured by the first calibrate_node, which aimed REACH_ERROR short of every point
     path = str(tmp_path / 'cal.json')
     with open(path, 'w') as f:
         f.write('{"A": [[1, 0], [0, 1]], "b": [0, 0], "look_xyz": [0.2, 0.0, 0.14], "max_residual_m": 0.001}')

@@ -42,8 +42,6 @@ class PickNode(Node):
         self.declare_parameter('serve', False)
         self.serve = self.get_parameter('serve').value
 
-        # The pick runs inside the service callback and waits on replies from the clients below, so they get their
-        # own group; the multi-threaded executor in main() keeps those replies flowing meanwhile.
         clients = ReentrantCallbackGroup()
         self.targetPosePublisher = self.create_publisher(TargetPose, 'inverse_topic', 10)
         self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks', callback_group=clients)
@@ -84,7 +82,6 @@ class PickNode(Node):
         for attempt in range(DETECT_ATTEMPTS):
             result = self.waitFor(self.detectBlocksSrv.call_async(DetectBlocks.Request(colors=['red'])))
             if result is not None and result.blocks:
-                # The camera sits about 5 cm ahead of the tool point; blocks under it are located best
                 return min(result.blocks, key=lambda b: math.hypot(b.x - (LOOK_XYZ[0] + 0.05), b.y - LOOK_XYZ[1]))
             self.get_logger().warn(f'No block seen (attempt {attempt + 1}/{DETECT_ATTEMPTS}), retrying.')
             self.wait(1.0)

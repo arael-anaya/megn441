@@ -11,13 +11,11 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 PICK_IN_PLACE = True
-START_POSE = [-1.3965, 0.1878, -0.8135]  # measured from /amcl_pose after an RViz 2D Pose Estimate
+START_POSE = [-1.3965, 0.1878, -0.8135]
 START_POSE_ONE = True
 PICK_YAW = 0.0
 PLACE_YAW = 3.14
 
-# Arm target (m, from the joint 1 axis, z = floor) the Place action drops the block at. Picking is pick_node's job:
-# it finds the red block with the camera.
 PLACE_POSITION = [0.0, -0.2, 0.00]
 
 FINAL_POSE = [5.5, -9.0, -0.869077]
@@ -59,9 +57,6 @@ def generate_launch_description():
         package='rosbot_arm', executable='ik_node', name='ik_node', output='screen',
         condition=IfCondition(LaunchConfiguration('start_arm')))
 
-    # The vision node works out where the camera is from the arm pose ik_node commands (forward_topic), so no
-    # robot_state_publisher / arm_state_publisher here: the robot's own bringup already runs a robot_state_publisher
-    # and a second joint state source only makes the two fight.
     vision_params = os.path.join(
         get_package_share_directory('rosbot_vision'), 'config', 'vision_params.yaml')
     pick_node = Node(

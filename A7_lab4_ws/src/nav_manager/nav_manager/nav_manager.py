@@ -23,8 +23,6 @@ from rclpy.time import Time
 import tf2_ros
 
 
-# An enum allows you to use words instead of arbitrary
-# numbers to represent your states
 class State(Enum):
     INIT = 1
     NAV_TO_BLOCK = 2
@@ -34,18 +32,16 @@ class State(Enum):
     DONE = 6
     FAILED = 7
     WAIT_POSES = 8
-    IDLE = 9          # after placing: wait for clicked points
-    NAV_IDLE = 10     # driving to a point clicked while idle
-    # You can add other states to represent other behaviors
+    IDLE = 9
+    NAV_IDLE = 10
 
 class NavManager(Node):
     STOW_MAX_SENDS = 4
 
     def __init__(self):
         super().__init__('nav_manager')
-        self.state = State.INIT # Initialize internal variable to represent state
+        self.state = State.INIT
 
-        # The timer calls the timer_callback function 10 times a second.
         self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.declare_parameter('block_nav_pose', [1.0, 0.0, 0.0])
@@ -92,7 +88,7 @@ class NavManager(Node):
         self.place_position = self.get_parameter('place_position').value
 
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self.pick_client = self.create_client(Trigger, 'pick_block')  # pick_node: look, detect, pick, retry
+        self.pick_client = self.create_client(Trigger, 'pick_block')
         self.pick_future = None
         self.place_client = ActionClient(self, Place, 'place')
         self.stow_pub = self.create_publisher(TargetPose, 'inverse_topic' , 10)
@@ -101,8 +97,6 @@ class NavManager(Node):
         self.ik_ok = None
         self.create_subscription(Bool, 'ik_result', lambda m: setattr(self, 'ik_ok', m.data), 10)
 
-        # Track the in-flight goal so it can be cancelled on shutdown, and keep
-        # direct velocity publishers as a backstop to force the robot to stop.
         self.active_handle = None
         self.cmd_vel_pubs = [self.create_publisher(Twist, 'cmd_vel', 10),
                              self.create_publisher(Twist, 'cmd_vel_nav', 10)]
@@ -121,20 +115,15 @@ class NavManager(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # Keep track of whether bot is currently busy
         self.BUSY = False
         self.nav_retries = 0
         self.retry_after = 0.0
 
-        # Can use this finished variable to end the node once it is done
         self.finished = False
         self.shutting_down = False
 
-    # The timer callback handles all logic of what to do when
     def timer_callback(self):
-        # Set state to BUSY while something is happening
         if self.BUSY:
-            # If currently BUSY, do nothing
             return
 
         if self.get_clock().now().nanoseconds / 1e9 < self.retry_after:
@@ -150,7 +139,7 @@ class NavManager(Node):
 
         if self.state is State.INIT:
             if self.startPoseOne and self.robot_xy() is None:
-                self.set_start_pose()  # stay in INIT until AMCL accepts it and publishes map->base_link
+                self.set_start_pose()
                 if self.start_pose_sends >= 3 and not self.amcl_pose_seen:
                     self.get_logger().warn(
                         'No map->base_link yet. Is /scan publishing and is odom->base_link up?',
@@ -194,7 +183,7 @@ class NavManager(Node):
 
         elif self.state is State.PLACE:
             goal = Place.Goal()
-            goal.block = self.make_point(self.place_position) #using the block as a makeshift place target pose since the data shared is the same
+            goal.block = self.make_point(self.place_position)
             self.send_goal(self.place_client, goal, State.IDLE, 'place', feedback_cb=self.arm_feedback)
 
         elif self.state is State.IDLE:
@@ -230,14 +219,10 @@ class NavManager(Node):
             self.finished = True
 
     def amcl_pose_callback(self, msg):
-        # amcl_pose is only published once AMCL has run a filter update on a scan
         if self.start_pose_sends > 0:
             self.amcl_pose_seen = True
 
     def set_start_pose(self):
-        # Every initialpose message resets AMCL's particle filter, and map->odom is only published after a
-        # scan update on the new filter. Re-sending at the 10 Hz timer rate keeps resetting it before that
-        # can happen, so send slowly and wait for AMCL (a subscriber on initialpose, i.e. active) first.
         now = self.get_clock().now().nanoseconds / 1e9
         if self.initial_pose_pub.get_subscription_count() == 0:
             self.get_logger().info('Waiting for AMCL to subscribe to initialpose...', throttle_duration_sec=2.0)
@@ -262,8 +247,6 @@ class NavManager(Node):
 
     def init_stow(self):
         now = self.get_clock().now().nanoseconds / 1e9
-        # Send, then re-send every 1.5 s until ik_node confirms (ik_result) and at least 2 sends went out. The
-        # first message can be lost if arm_control has not matched ik_node's forward_topic yet; re-sending is harmless.
         if self.stow_sent_at is None or (now - self.stow_sent_at > 1.5 and self.stow_sends < self.STOW_MAX_SENDS
                                          and (self.ik_ok is not True or self.stow_sends < 2)):
             if self.stow_pub.get_subscription_count() == 0:
@@ -440,7 +423,6 @@ class NavManager(Node):
         else:
             msg = getattr(wrapped.result, 'message', '')
             self.get_logger().error(f'{label}: failed (status {wrapped.status}) {msg}')
-            # A failed idle drive just returns to idle so another point can be clicked
             self.state = State.IDLE if label == 'navigate to clicked point' else State.FAILED
 
         self.BUSY = False
@@ -466,13 +448,11 @@ class NavManager(Node):
     def stop_robot(self):
         """Cancel any in-flight goal and command zero velocity so the robot halts."""
         self.shutting_down = True
-        self.BUSY = True  # stop the timer from sending new goals
+        self.BUSY = True
         handle = self.active_handle
         cancel_future = handle.cancel_goal_async() if handle is not None else None
         stop = Twist()
         deadline = time.time() + 2.0
-        # Keep publishing zeros while the cancel propagates, so the controller /
-        # velocity smoother can't leave the last forward command latched.
         while time.time() < deadline:
             for pub in self.cmd_vel_pubs:
                 pub.publish(stop)
@@ -490,7 +470,6 @@ class NavManager(Node):
 
 
 def main():
-    # Keep the context alive on Ctrl-C so we can still publish stop commands.
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = NavManager()
     try:

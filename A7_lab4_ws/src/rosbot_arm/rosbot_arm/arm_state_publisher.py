@@ -6,8 +6,8 @@ from sensor_msgs.msg import JointState
 
 from rosbot_msgs.srv import GetAngles
 
-RATE = 5.0  # servo reads per second
-MAX_READING_AGE = 0.7  # seconds before a servo reading is too old to publish
+RATE = 5.0
+MAX_READING_AGE = 0.7
 
 
 def pulseToDeg(pulse):
@@ -34,13 +34,10 @@ class ArmStatePublisher(Node):
         self.jointStatePublisher = self.create_publisher(JointState, 'joint_states', 10)
         self.getAnglesClient = self.create_client(GetAngles, 'get_angles')
 
-        # Last known pulses so one failed servo read does not drop a joint
         self.pulses = {1: 500, 2: 500, 3: 500, 4: 500, 5: 500}
         self.readTimes = {i: 0.0 for i in self.pulses}
         self.haveReading = False
         self.requestPending = False
-        # A joint whose read failed (checksum error) keeps its old pulse; publishing it with a fresh stamp puts
-        # the camera where the arm was, not where it is. Stop publishing until every joint has been read again.
         self.timer = self.create_timer(1.0 / RATE, self.update)
 
     def update(self):

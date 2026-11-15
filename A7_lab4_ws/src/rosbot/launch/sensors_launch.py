@@ -9,38 +9,28 @@ from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
-    # Find the location of the package on your computer
 
     orbbec_pkg_path = get_package_share_directory('orbbec_camera')
     rosbot_pkg_path = get_package_share_directory('rosbot')
     laser_filters_config = os.path.join(rosbot_pkg_path, 'config/lidar_filters_config_a1.yaml')
 
-    # TODO: Launch your sllidar_node, adding parameters options
     sllidar_node = launch_ros.actions.Node(
         package='sllidar_ros2',
         executable='sllidar_node',
         name='lidar',
         parameters=[{
-            # 'serial_port': '/dev/ttyUSB0',
             'serial_port': '/dev/ttyCH341USB0',
             'serial_baudrate': 115200,
             'frame_id': 'lidar_frame',
             'angle_compensate': True,
         }],
-        # Don't edit the remapping.
-        # It is needed for the lidar filter included below.
         remappings=[('scan', 'scan_raw')]
         )
 
 
-    # TODO: Launch dabai_dcw.launch.py from orbbec camera
-    # This is the same as running
-    # `ros2 launch example_pkg example_launch.py`
     orbbec_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(orbbec_pkg_path, 'launch', 'dabai_dcw.launch.py')),
-        # camera_name sets the topic prefix (/depth_cam/color/image_raw) the vision node subscribes to;
-        # HW alignment puts depth on the same pixels as color, which vision requires
         launch_arguments={'camera_name': 'depth_cam', 'depth_registration': 'true', 'align_mode': 'HW'}.items(),
     )
 
@@ -54,7 +44,6 @@ def generate_launch_description():
                         ('scan_filtered', 'scan')]
         )
 
-    # TODO: Launch rviz. 
 
     use_rviz_arg = DeclareLaunchArgument(
         'use_rviz', default_value='true',
@@ -70,8 +59,6 @@ def generate_launch_description():
 
     )
 
-    # Your final returned LaunchDescription includes 
-    # a list of all of the nodes, launch files, etc.
     return launch.LaunchDescription([
         use_rviz_arg,
         sllidar_node,
@@ -82,7 +69,6 @@ def generate_launch_description():
 
 
 if __name__ == '__main__':
-    # Create a LaunchDescription object
     ld = generate_launch_description()
 
     ls = launch.LaunchService()

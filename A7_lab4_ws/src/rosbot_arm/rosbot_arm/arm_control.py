@@ -16,7 +16,6 @@ class ArmControl(Node):
         self.board = Board()
         self.board.enable_reception()
 
-        # Writes get their own group so a servo read that never returns cannot hold them up
         writes = ReentrantCallbackGroup()
         self.forwardControlSubscription = self.create_subscription(ForwardPose , 'forward_topic' , self.forwardPoseCallback, 10, callback_group=writes)
         self.gripperControlSubscription = self.create_subscription(GripperControl , 'gripper_topic' , self.gripperControlCallback , 10, callback_group=writes)
@@ -50,7 +49,7 @@ class ArmControl(Node):
         the read runs in a worker thread and is abandoned after `timeout`."""
         lock = self.board.servo_read_lock
         if not lock.acquire(blocking=False):
-            return None  # an earlier read is still stuck holding the lock
+            return None
         lock.release()
         out = []
         worker = threading.Thread(target=lambda: out.append(self.board.bus_servo_read_position(jointId)), daemon=True)

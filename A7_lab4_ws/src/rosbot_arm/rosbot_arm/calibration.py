@@ -14,8 +14,6 @@ import numpy as np
 from rosbot_arm.armConfig import PICK_OFFSET, REACH_ERROR, towardBase
 
 CALIBRATION_FILE = '~/.ros/block_calibration.json'
-# What the saved map produces: the IK target to send for a block seen at a camera position. Files without this were
-# measured by the first calibrate_node, which aimed REACH_ERROR short of every point; they are not used.
 MAPS_TO = 'ik_target_v2'
 
 
@@ -42,7 +40,6 @@ def describe(A, b):
     rotation = u @ vt
     mirrored = np.linalg.det(A) < 0
     if mirrored:
-        # Closest rotation for a mirrored map: flip one axis back so the angle is meaningful
         rotation = u @ np.diag([1.0, -1.0]) @ vt
     angle = math.degrees(math.atan2(rotation[1, 0], rotation[0, 0]))
     return (f'rotation {angle:+.1f} deg, scale {s[0]:.3f} / {s[1]:.3f}, '

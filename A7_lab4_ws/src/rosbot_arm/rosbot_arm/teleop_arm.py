@@ -96,7 +96,7 @@ class TeleopArm(Node):
             if not self.joyLost:
                 self.get_logger().warn('Controller stopped publishing - holding the arm still.')
             self.joyLost = True
-            self.joy = None  # stop integrating the last stick values
+            self.joy = None
 
     def axis(self, index):
         if self.joy is None or index >= len(self.joy.axes):

@@ -1,16 +1,3 @@
-# Copyright (c) 2018 Intel Corporation
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Example for spawning multiple robots in Gazebo.
@@ -33,22 +20,18 @@ from launch.substitutions import LaunchConfiguration, TextSubstitution
 
 
 def generate_launch_description():
-    # Get the launch directory
     bringup_dir = get_package_share_directory('nav2_bringup')
     launch_dir = os.path.join(bringup_dir, 'launch')
 
-    # Names and poses of the robots
     robots = [
         {'name': 'robot1', 'x_pose': 0.0, 'y_pose': 0.5, 'z_pose': 0.01,
                            'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0},
         {'name': 'robot2', 'x_pose': 0.0, 'y_pose': -0.5, 'z_pose': 0.01,
                            'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0}]
 
-    # Simulation settings
     world = LaunchConfiguration('world')
     simulator = LaunchConfiguration('simulator')
 
-    # On this example all robots are launched with the same settings
     map_yaml_file = LaunchConfiguration('map')
 
     autostart = LaunchConfiguration('autostart')
@@ -57,7 +40,6 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration('use_rviz')
     log_settings = LaunchConfiguration('log_settings', default='true')
 
-    # Declare the launch arguments
     declare_world_cmd = DeclareLaunchArgument(
         'world',
         default_value=os.path.join(bringup_dir, 'worlds', 'world_only.model'),
@@ -102,13 +84,11 @@ def generate_launch_description():
         default_value='True',
         description='Whether to start RVIZ')
 
-    # Start Gazebo with plugin providing the robot spawning service
     start_gazebo_cmd = ExecuteProcess(
         cmd=[simulator, '--verbose', '-s', 'libgazebo_ros_init.so',
                                      '-s', 'libgazebo_ros_factory.so', world],
         output='screen')
 
-    # Define commands for launching the navigation instances
     nav_instances_cmds = []
     for robot in robots:
         params_file = LaunchConfiguration(f"{robot['name']}_params_file")
@@ -167,10 +147,8 @@ def generate_launch_description():
 
         nav_instances_cmds.append(group)
 
-    # Create the launch description and populate
     ld = LaunchDescription()
 
-    # Declare the launch options
     ld.add_action(declare_simulator_cmd)
     ld.add_action(declare_world_cmd)
     ld.add_action(declare_map_yaml_cmd)
@@ -181,7 +159,6 @@ def generate_launch_description():
     ld.add_action(declare_rviz_config_file_cmd)
     ld.add_action(declare_use_robot_state_pub_cmd)
 
-    # Add the actions to start gazebo, robots and simulations
     ld.add_action(start_gazebo_cmd)
 
     for simulation_instance_cmd in nav_instances_cmds:

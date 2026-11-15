@@ -53,7 +53,6 @@ def solveIK(x,y,z,roll,pitch, upDownConstraint):
     return jointAngles
 
 
-# Only joint 2 is limited to protect the screen
 min_pulses = [0, 125, 0, 0, 0]
 max_pulses = [1000, 775, 1000, 1000, 1000]
 

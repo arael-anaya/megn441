@@ -1,9 +1,6 @@
 import cv2
 import numpy as np
 
-# ranges of Hue Saturation Value for different colors. Kept wide on purpose: glare and shadow on a block drop its
-# saturation and value, and anything flat on the table that happens to match is thrown out later by the depth check.
-# Override per color with the hsv_<color> parameters in vision_params.yaml.
 HSV_RANGES = {
     'red':   [((0, 90, 50), (10, 255, 255)), ((165, 90, 50), (179, 255, 255))],
     'green': [((35, 60, 40), (85, 255, 255))],
@@ -12,7 +9,6 @@ HSV_RANGES = {
 
 
 def colorMask(bgr, color, ranges=None):
-    # blur first so sensor noise does not break the block into speckles
     hsv = cv2.cvtColor(cv2.GaussianBlur(bgr, (5, 5), 0), cv2.COLOR_BGR2HSV)
 
     mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
@@ -23,7 +19,6 @@ def colorMask(bgr, color, ranges=None):
 
 
 def cleanMask(mask):
-    # Open removes specks, close fills small holes. 3x3 so a distant block (only a few pixels wide) survives.
     kernel = np.ones((3, 3), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))

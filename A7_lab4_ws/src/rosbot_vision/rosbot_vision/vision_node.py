@@ -28,35 +28,24 @@ from rosbot_vision.findBlock import HSV_RANGES, maskPixels
 from rosbot_vision.locateBlock import locate_block
 from rosbot_vision.depthUtils import depth_to_meters, quat_to_matrix, fit_table_plane, level_rotation
 
-# rosbot_arm already depends on rosbot_vision, so this package cannot declare the reverse dependency in package.xml.
-# Both are always built in this workspace; only the kinematics and the look pose are borrowed.
 from rosbot_arm import inverseKinematics
 from rosbot_arm.armConfig import LOOK_XYZ, BLOCK_SIZE
 
-DEPTH_SCALE = 0.001  # 16UC1 depth images are in mm; 32FC1 depth is already in meters
-MAX_PAIR_GAP = 0.1   # color and depth frames further apart in time (s) than this are not paired
-# Yaw comes from the block's top-face edges, which are only a few pixels long far away. Beyond this distance from the
-# camera (m) the reported yaw is a guess and a warning is logged; re-detect closer.
+DEPTH_SCALE = 0.001
+MAX_PAIR_GAP = 0.1
 YAW_MAX_RANGE = 0.55
 
-# The camera housing frame the driver hangs its optical frames off; the arm model ends here
 CAMERA_LINK_FRAME = 'depth_cam_link'
 
-# The image is only trusted this long (s) after a commanded arm move was due to finish
 ARM_SETTLE = 0.7
 ARM_WAIT_MAX = 10.0
-# A floor measured from depth is only used if it is this close to where the arm model puts the floor. Further off
-# and depth has found something else flat (the robot's deck, a box) or is reading garbage at its minimum range.
 PLANE_MAX_HEIGHT_ERROR = 0.04
 
-# When a requested block is not seen, the arm backs up and rises for a wider, higher view of the floor. The gripper
-# keeps its pitch and roll; the tool only moves up and toward the base (same heading), to the highest point the arm
-# can reach like that. The arm stays there afterwards.
-RAISE_MIN_RADIUS = 0.08  # smallest tool radius (m) from the joint 1 axis to retreat to
-RAISE_MARGIN = 0.01      # stay this far (m) inside the reach limit, so the arm is never asked to fully straighten
+RAISE_MIN_RADIUS = 0.08
+RAISE_MARGIN = 0.01
 RAISE_DURATION = 1.5
 
-MAX_CAPTURES = 30  # detect_blocks calls kept in capture_dir
+MAX_CAPTURES = 30
 
 
 def stampSec(stamp):
@@ -79,23 +68,13 @@ class VisionNode(Node):
         self.declare_parameter('depth_topic', '/depth_cam/depth/image_raw')
         self.declare_parameter('camera_info_topic', '/depth_cam/color/camera_info')
 
-        # The rest are scene tuning, set in config/vision_params.yaml
-        # Smallest color blob considered, in pixels. Real size is checked in meters, so this only drops speckles.
         self.declare_parameter('min_area', 60)
-        # Anything colored whose top is higher than this above the table (the gripper, the robot) is not a block
         self.declare_parameter('max_block_height', 0.06)
-        # Reject color blobs that depth shows lying flat on the table. False keeps them on color alone, for when depth
-        # misses the blocks but there is nothing else block-colored on the table.
         self.declare_parameter('require_raised', False)
-        # Each request looks at this many new frames and reports the median of the colors seen in at least 2 of them
         self.declare_parameter('num_frames', 5)
         self.declare_parameter('frame_timeout', 3.0)
-        # Half the block edge; the block size itself is armConfig.BLOCK_SIZE
         self.declare_parameter('block_half_height', BLOCK_SIZE / 2)
-        # Back the arm up for a higher view when a requested block is not seen from where the arm is
         self.declare_parameter('raise_when_missing', True)
-        # Every detect_blocks call saves its color, depth and annotated image plus the numbers it used here, so a miss
-        # can be looked at afterwards (rosbot_vision replay_capture). Empty string turns it off.
         self.declare_parameter('capture_dir', '~/.ros/vision_captures')
         for color, ranges in HSV_RANGES.items():
             self.declare_parameter(f'hsv_{color}', [int(v) for pair in ranges for bound in pair for v in bound])
@@ -116,8 +95,6 @@ class VisionNode(Node):
         self.captureCount = 0
         self.hsvRanges = {color: hsvFromParam(self.get_parameter(f'hsv_{color}').value) for color in HSV_RANGES}
 
-        # TF is only used for the camera driver's fixed lens position inside the camera housing. The arm's joints are
-        # NOT taken from TF: the robot's own bringup publishes conflicting joint states (see cameraModel).
         self.tfBuffer = tf2_ros.Buffer()
         self.tfListener = tf2_ros.TransformListener(self.tfBuffer, self, spin_thread=True)
         self.colorFrame = None
@@ -126,23 +103,18 @@ class VisionNode(Node):
 
         self.bridge = CvBridge()
 
-        # Recent frames as (arrival time, header stamp, image). The service runs on its own thread and waits for
-        # frames that arrive after the request, so it never uses an image taken while the arm was still moving.
         self.lock = threading.Lock()
         self.colorFrames = deque(maxlen=30)
         self.depthFrames = deque(maxlen=30)
         self.cameraInfo = None
-        # Last pulse every arm servo was sent to, and when that move is due to finish
         self.armPulses = {}
         self.armMoveEnd = 0.0
         self.ikResult = None
 
         imageGroup = MutuallyExclusiveCallbackGroup()
         serviceGroup = MutuallyExclusiveCallbackGroup()
-        # Own thread so arm commands and IK answers still arrive while a service call waits for the arm
         stateGroup = MutuallyExclusiveCallbackGroup()
 
-        # Best-effort QoS matches camera drivers that publish sensor data, and still connects to reliable ones
         self.colorSubscription = self.create_subscription(
             Image, colorTopic, self.colorCallback, qos_profile_sensor_data, callback_group=imageGroup)
         self.depthSubscription = self.create_subscription(
@@ -155,16 +127,13 @@ class VisionNode(Node):
         self.raiseViewSrv = self.create_service(
             Trigger, 'raise_view', self.raiseViewCallback, callback_group=serviceGroup)
 
-        # Everything that moves the arm goes through ik_node -> forward_topic -> arm_control
         self.forwardPoseSubscription = self.create_subscription(
             ForwardPose, 'forward_topic', self.forwardPoseCallback, 10, callback_group=stateGroup)
         self.ikResultSubscription = self.create_subscription(
             Bool, 'ik_result', self.ikResultCallback, 10, callback_group=stateGroup)
         self.targetPosePublisher = self.create_publisher(TargetPose, 'inverse_topic', 10)
-        # Only for when this node started after the arm was already put in place
         self.getAnglesClient = self.create_client(GetAngles, 'get_angles', callback_group=stateGroup)
 
-        # Color image with what was found drawn on it; view with rqt_image_view
         self.debugPublisher = self.create_publisher(Image, '~/debug_image', 1)
 
         self.get_logger().info(
@@ -295,7 +264,6 @@ class VisionNode(Node):
         (so only radius and z change). Returns (ok, message)."""
         angles, _ = self.armAngles()
         x, y, z, roll, pitch = (float(v) for v in inverseKinematics.solveFK(angles))
-        # Servo quantisation (0.24 deg per pulse) leaves the pitch a hair off; snap it to a whole degree
         pitch = float(round(pitch))
         radius = math.hypot(x, y)
         heading = math.atan2(y, x)
@@ -320,7 +288,6 @@ class VisionNode(Node):
             return False, 'ik_node did not answer. Is it running?'
         if not self.ikResult:
             return False, f'ik_node rejected ({best[0]:.3f}, {best[1]:.3f}, {best[2]:.3f}).'
-        # ik_node's servo command for this move arrives on forward_topic; the next look waits for it to finish
         time.sleep(0.3)
         return True, f'Raising to ({best[0]:.3f}, {best[1]:.3f}, {best[2]:.3f}).'
 
@@ -356,7 +323,6 @@ class VisionNode(Node):
             if depths:
                 _, depthStamp, candidate = min(depths, key=lambda d: abs(d[1] - colorStamp))
                 if abs(depthStamp - colorStamp) > MAX_PAIR_GAP:
-                    # Some driver settings stamp color and depth from different clocks; go by arrival instead
                     depthArrival, _, candidate = min(depths, key=lambda d: abs(d[0] - arrival))
                     if abs(depthArrival - arrival) > MAX_PAIR_GAP:
                         candidate = None
@@ -461,7 +427,6 @@ class VisionNode(Node):
 
         self.detectOnce(request, response)
         found = {b.color for b in response.blocks}
-        # An empty request means every color, and not all of them need to be on the table: only retreat if none show
         missing = set(request.colors) - found if request.colors else (set() if found else set(HSV_RANGES))
         if not missing or not self.raiseWhenMissing:
             return response
@@ -478,7 +443,6 @@ class VisionNode(Node):
         return response
 
     def detectOnce(self, request, response):
-        # Waits for the arm to stop, so every frame collected after this is from the pose the model describes
         pose, angles, source = self.cameraPose()
         modelPose = pose
 
@@ -490,13 +454,11 @@ class VisionNode(Node):
         k = self.cameraInfo.k
         intrinsics = (k[0], k[4], k[2], k[5])
 
-        # One floor fit per request: the camera does not move while the frames are collected
         depths = [depth for _, depth in pairs if depth is not None]
         pose, plane, planeSource = self.levelledPose(depths[-1] if depths else None, intrinsics, pose)
         self.get_logger().info(
             f'Camera at ({pose[1][0]:.3f}, {pose[1][1]:.3f}, {pose[1][2]:.3f}) m in the arm frame from the '
             f'{source}; floor from {planeSource}.')
-        # Blocks raised off the floor (a stack): look for them on a plane that high instead
         if request.height > 0:
             plane = (plane[0], plane[1] - float(request.height))
             self.get_logger().info(f'Looking for blocks {1000 * request.height:.0f} mm above the floor.')
@@ -513,7 +475,6 @@ class VisionNode(Node):
         self.debugPublisher.publish(self.bridge.cv2_to_imgmsg(debug, encoding='bgr8'))
 
         need = min(self.minDetections, len(pairs))
-        # An empty request means every color
         wanted = set(request.colors) or set(perColor)
         reported = {}
         for color, dets in perColor.items():
@@ -529,9 +490,7 @@ class VisionNode(Node):
 
             x = float(np.median([d['x'] for d in dets]))
             y = float(np.median([d['y'] for d in dets]))
-            # Blocks lie flat on the floor (z = 0 in the arm frame), so the centre height is known, not measured
             z = self.blockHalfHeight
-            # Yaw repeats every 90 deg, so average on a circle of 4 * yaw
             turns = np.radians([4 * d['yaw_deg'] for d in dets])
             yawDeg = math.degrees(math.atan2(np.sin(turns).mean(), np.cos(turns).mean())) / 4
 
@@ -585,7 +544,6 @@ class VisionNode(Node):
 def main():
     rclpy.init()
     vision_node = VisionNode()
-    # Images keep arriving on one thread while detect_blocks waits for fresh ones on another
     executor = MultiThreadedExecutor(num_threads=3)
     executor.add_node(vision_node)
     try:
