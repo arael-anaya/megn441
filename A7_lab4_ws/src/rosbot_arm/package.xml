@@ -16,6 +16,7 @@
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>action_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>rosbot_msgs</depend>
   <exec_depend>rosbot_vision</exec_depend>
   

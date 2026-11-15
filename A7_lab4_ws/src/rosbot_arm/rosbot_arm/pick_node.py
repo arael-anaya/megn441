@@ -1,15 +1,19 @@
-"""Look at the floor, find a block, pick it up. The arm-only version of what nav_manager does before it drives.
+"""Look at the floor, find a block, pick it up. The one place that procedure lives.
 
-    ros2 launch rosbot_arm pick_launch.py
+    ros2 launch rosbot_arm pick_launch.py        # picks once, then exits
+    ros2 run rosbot_arm pick_node --ros-args -p serve:=true   # stays up; call the pick_block service (nav_manager does)
 
-Uses the same pieces as the mission: the look pose from armConfig, the vision node's detect_blocks, the saved
-calibration and ik_node's Pick action (which turns the gripper to the block and fails if it closes on nothing).
+Uses the look pose from armConfig, the vision node's detect_blocks, the saved calibration and ik_node's Pick action
+(which turns the gripper to the block and fails if it closes on nothing).
 """
 import math
+import threading
 import time
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from action_msgs.msg import GoalStatus
@@ -17,6 +21,7 @@ from geometry_msgs.msg import Point
 from rosbot_msgs.action import Pick
 from rosbot_msgs.msg import TargetPose
 from rosbot_msgs.srv import DetectBlocks
+from std_srvs.srv import Trigger
 
 from rosbot_arm import calibration
 from rosbot_arm.armConfig import LOOK_XYZ, GRASP_Z
@@ -34,15 +39,31 @@ class PickNode(Node):
         self.calibration, status = calibration.loadFor(LOOK_XYZ)
         (self.get_logger().info if self.calibration else self.get_logger().warn)(status)
 
+        self.declare_parameter('serve', False)
+        self.serve = self.get_parameter('serve').value
+
+        # The pick runs inside the service callback and waits on replies from the clients below, so they get their
+        # own group; the multi-threaded executor in main() keeps those replies flowing meanwhile.
+        clients = ReentrantCallbackGroup()
         self.targetPosePublisher = self.create_publisher(TargetPose, 'inverse_topic', 10)
-        self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks')
-        self.pickClient = ActionClient(self, Pick, 'pick')
+        self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks', callback_group=clients)
+        self.pickClient = ActionClient(self, Pick, 'pick', callback_group=clients)
+        if self.serve:
+            self.create_service(Trigger, 'pick_block', self.pickBlockCallback,
+                                callback_group=MutuallyExclusiveCallbackGroup())
+
+    def pickBlockCallback(self, request, response):
+        response.success, response.message = self.run()
+        return response
 
     def wait(self, seconds):
-        """Sleep while still letting ROS process callbacks."""
-        end = time.time() + seconds
-        while rclpy.ok() and time.time() < end:
-            rclpy.spin_once(self, timeout_sec=0.05)
+        time.sleep(seconds)
+
+    def waitFor(self, future):
+        """Block until a future is done (the executor in main() delivers the reply); None if shut down first."""
+        while rclpy.ok() and not future.done():
+            time.sleep(0.02)
+        return future.result() if future.done() else None
 
     def waitForArm(self):
         while rclpy.ok():
@@ -61,9 +82,7 @@ class PickNode(Node):
         self.wait(LOOK_MOVE_TIME + LOOK_SETTLE)
 
         for attempt in range(DETECT_ATTEMPTS):
-            future = self.detectBlocksSrv.call_async(DetectBlocks.Request())
-            rclpy.spin_until_future_complete(self, future)
-            result = future.result()
+            result = self.waitFor(self.detectBlocksSrv.call_async(DetectBlocks.Request(colors=['red'])))
             if result is not None and result.blocks:
                 # The camera sits about 5 cm ahead of the tool point; blocks under it are located best
                 return min(result.blocks, key=lambda b: math.hypot(b.x - (LOOK_XYZ[0] + 0.05), b.y - LOOK_XYZ[1]))
@@ -82,43 +101,50 @@ class PickNode(Node):
 
         future = self.pickClient.send_goal_async(
             goal, feedback_callback=lambda m: self.get_logger().info(f' arm stage: {m.feedback.stage}'))
-        rclpy.spin_until_future_complete(self, future)
-        handle = future.result()
+        handle = self.waitFor(future)
         if handle is None or not handle.accepted:
             self.get_logger().error('ik_node rejected the pick goal (arm busy?).')
             return False
         resultFuture = handle.get_result_async()
-        rclpy.spin_until_future_complete(self, resultFuture)
-        wrapped = resultFuture.result()
+        wrapped = self.waitFor(resultFuture)
+        if wrapped is None:
+            return False
         if wrapped.status == GoalStatus.STATUS_SUCCEEDED and wrapped.result.success:
             return True
         self.get_logger().warn(f'Pick failed: {wrapped.result.message}')
         return False
 
     def run(self):
+        """Look, find a red block and pick it, retrying. Returns (success, message)."""
         if not self.waitForArm():
-            return
+            return False, 'Shut down while waiting for ik_node / vision_node.'
         for attempt in range(PICK_ATTEMPTS):
             block = self.lookForBlock()
             if block is None:
-                self.get_logger().error('No block found. Giving up.')
-                return
+                return False, 'No block found.'
             if self.pick(block):
-                self.get_logger().info('Block picked up and stowed.')
-                return
+                return True, 'Block picked up and stowed.'
             self.get_logger().warn(f'Trying again ({attempt + 2}/{PICK_ATTEMPTS})...' if attempt + 1 < PICK_ATTEMPTS
                                    else 'Out of attempts.')
+        return False, 'Out of pick attempts.'
 
 
 def main():
     rclpy.init()
     node = PickNode()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
     try:
-        node.run()
+        if node.serve:
+            executor.spin()
+        else:
+            threading.Thread(target=executor.spin, daemon=True).start()
+            ok, message = node.run()
+            (node.get_logger().info if ok else node.get_logger().error)(message)
     except KeyboardInterrupt:
         pass
     node.destroy_node()
-    rclpy.shutdown()
+    rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

@@ -10,24 +10,17 @@ from rclpy.action import ActionClient
 
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import Bool
+from std_srvs.srv import Trigger
 from geometry_msgs.msg import Twist, Point, PointStamped, PoseStamped, PoseWithCovarianceStamped
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav2_msgs.action import NavigateToPose
-from rosbot_msgs.action import Pick, Place
+from rosbot_msgs.action import Place
 from rosbot_msgs.msg import TargetPose
-from rosbot_msgs.srv import DetectBlocks
-from rosbot_arm import calibration
-from rosbot_arm.armConfig import STOW_XYZ, STOW_PITCH, LOOK_XYZ
+from rosbot_arm.armConfig import STOW_XYZ, STOW_PITCH
 from rclpy.time import Time
 import tf2_ros
-
-LOOK_MOVE_TIME = 2.0      # seconds the arm takes to reach the look pose
-LOOK_SETTLE = 1.0         # extra wait so the arm has stopped swaying; the vision node waits for the move itself
-DETECT_RETRY_DELAY = 1.5
-DETECT_MAX_ATTEMPTS = 10
-PICK_MAX_ATTEMPTS = 4     # look + grab tries before giving up (ik_node fails a pick whose gripper closed on nothing)
 
 
 # An enum allows you to use words instead of arbitrary
@@ -43,11 +36,11 @@ class State(Enum):
     WAIT_POSES = 8
     IDLE = 9          # after placing: wait for clicked points
     NAV_IDLE = 10     # driving to a point clicked while idle
-    LOOK = 11         # arm moves to the block-capture pose
-    DETECT = 12       # ask the vision node where the red block is
     # You can add other states to represent other behaviors
 
 class NavManager(Node):
+    STOW_MAX_SENDS = 4
+
     def __init__(self):
         super().__init__('nav_manager')
         self.state = State.INIT # Initialize internal variable to represent state
@@ -56,7 +49,6 @@ class NavManager(Node):
         self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.declare_parameter('block_nav_pose', [1.0, 0.0, 0.0])
-        self.declare_parameter('block_position', [0.2, 0.0, -0.01])
         self.declare_parameter('goal_position', [0.0, 0.0, 0.0])
         self.declare_parameter('place_position', [0.2, 0.0, -0.01])
         self.declare_parameter('wait_for_clicks', True)
@@ -80,6 +72,13 @@ class NavManager(Node):
         self.start_pose = list(self.get_parameter('start_pose').value)
         self.startPoseOne = self.get_parameter('startPoseOne').value
         self.initial_pose_pub = self.create_publisher(PoseWithCovarianceStamped, 'initialpose', 10)
+        self.start_pose_sent_at = None
+        self.start_pose_sends = 0
+        self.amcl_pose_seen = False
+        self.create_subscription(
+            PoseWithCovarianceStamped, 'amcl_pose', self.amcl_pose_callback,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=ReliabilityPolicy.RELIABLE))
 
         self.final_pose_pub = self.create_publisher(
             PoseStamped, 'final_pose_marker',
@@ -89,34 +88,24 @@ class NavManager(Node):
         self.add_on_set_parameters_callback(self.on_params)
 
         self.block_nav_pose = self.get_parameter('block_nav_pose').value
-        self.block_position = self.get_parameter('block_position').value
         self.goal_nav_pose = self.get_parameter('goal_position').value
         self.place_position = self.get_parameter('place_position').value
 
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self.pick_client = ActionClient(self, Pick, 'pick')
+        self.pick_client = self.create_client(Trigger, 'pick_block')  # pick_node: look, detect, pick, retry
+        self.pick_future = None
         self.place_client = ActionClient(self, Place, 'place')
         self.stow_pub = self.create_publisher(TargetPose, 'inverse_topic' , 10)
         self.stow_sent_at = None
+        self.stow_sends = 0
+        self.ik_ok = None
+        self.create_subscription(Bool, 'ik_result', lambda m: setattr(self, 'ik_ok', m.data), 10)
 
         # Track the in-flight goal so it can be cancelled on shutdown, and keep
         # direct velocity publishers as a backstop to force the robot to stop.
         self.active_handle = None
         self.cmd_vel_pubs = [self.create_publisher(Twist, 'cmd_vel', 10),
                              self.create_publisher(Twist, 'cmd_vel_nav', 10)]
-
-        # Camera -> IK target correction measured by `ros2 launch rosbot_arm stack_launch.py mode:=calibrate`
-        self.calib, status = calibration.loadFor(LOOK_XYZ)
-        (self.get_logger().info if self.calib else self.get_logger().warn)(status)
-        self.preset_block_position = list(self.block_position)
-        self.block_yaw = 0.0
-        self.pick_attempts = 0
-        self.ik_ok = None
-        self.create_subscription(Bool, 'ik_result', lambda m: setattr(self, 'ik_ok', m.data), 10)
-        self.detect_client = self.create_client(DetectBlocks, 'detect_blocks')
-        self.look_sent_at = None
-        self.detect_future = None
-        self.detect_attempts = 0
 
         self.wait_for_clicks_enabled = self.get_parameter('wait_for_clicks').value
         self.block_click = None
@@ -162,6 +151,10 @@ class NavManager(Node):
         if self.state is State.INIT:
             if self.startPoseOne and self.robot_xy() is None:
                 self.set_start_pose()  # stay in INIT until AMCL accepts it and publishes map->base_link
+                if self.start_pose_sends >= 3 and not self.amcl_pose_seen:
+                    self.get_logger().warn(
+                        'No map->base_link yet. Is /scan publishing and is odom->base_link up?',
+                        throttle_duration_sec=5.0)
                 return
             self.init_stow()
           
@@ -170,65 +163,24 @@ class NavManager(Node):
 
         elif self.state is State.NAV_TO_BLOCK:
             self.send_goal(self.nav_client, self.make_nav_goal(self.block_nav_pose),
-                     State.LOOK, 'navigate to block')
-
-        elif self.state is State.LOOK:
-            now = self.get_clock().now().nanoseconds / 1e9
-            if self.look_sent_at is None:
-                if self.stow_pub.get_subscription_count() == 0:
-                    return
-                self.stow_pub.publish(TargetPose(x=LOOK_XYZ[0], y=LOOK_XYZ[1], z=LOOK_XYZ[2], roll=0.0,
-                                                 pitch=-90.0, duration=LOOK_MOVE_TIME))
-                self.ik_ok = None
-                self.look_sent_at = now
-                self.get_logger().info(f'Moving arm to block-capture pose {LOOK_XYZ}...')
-            elif self.ik_ok is False:
-                self.get_logger().error(f'ik_node rejected look pose {LOOK_XYZ}; using preset block_position')
-                self.look_sent_at = None
-                self.use_preset_block()
-                self.state = State.PICK
-            elif now - self.look_sent_at > LOOK_MOVE_TIME + LOOK_SETTLE:
-                self.look_sent_at = None  # so a retry moves back to the look pose
-                self.detect_attempts = 0
-                self.state = State.DETECT
-
-        elif self.state is State.DETECT:
-            if self.detect_future is None:
-                if not self.detect_client.service_is_ready():
-                    self.get_logger().info('Waiting for detect_blocks...', throttle_duration_sec=2.0)
-                    return
-                self.detect_future = self.detect_client.call_async(DetectBlocks.Request(colors=['red']))
-            elif self.detect_future.done():
-                result = self.detect_future.result()
-                blocks = result.blocks if result is not None else []
-                self.detect_future = None
-                if blocks:
-                    # Where the camera sees the block -> the IK target that puts the gripper on it
-                    x, y, yaw = calibration.pickTarget(self.calib, blocks[0].x, blocks[0].y, blocks[0].yaw)
-                    self.block_position = [x, y, self.preset_block_position[2]]
-                    self.block_yaw = yaw
-                    self.get_logger().info(
-                        f'Red block: camera ({blocks[0].x:.3f}, {blocks[0].y:.3f}) -> pick ({x:.3f}, {y:.3f}), '
-                        f'block yaw {math.degrees(yaw):.0f} deg')
-                    self.state = State.PICK
-                else:
-                    self.detect_attempts += 1
-                    self.get_logger().warn(
-                        f'Red block not found (attempt {self.detect_attempts}/{DETECT_MAX_ATTEMPTS})')
-                    if self.detect_attempts >= DETECT_MAX_ATTEMPTS:
-                        self.get_logger().warn('Giving up on vision; using the preset block_position')
-                        self.use_preset_block()
-                        self.state = State.PICK
-                    else:
-                        self.retry_after = self.get_clock().now().nanoseconds / 1e9 + DETECT_RETRY_DELAY
+                     State.PICK, 'navigate to block')
 
         elif self.state is State.PICK:
-            goal = Pick.Goal()
-            goal.block = self.make_point(self.block_position)
-            goal.yaw = float(self.block_yaw)
-            after_pick = State.WAIT_POSES if self.pick_in_place else State.NAV_TO_GOAL
-            self.send_goal(self.pick_client, goal, after_pick, 'pick',
-                            feedback_cb=self.arm_feedback)
+            if self.pick_future is None:
+                if not self.pick_client.service_is_ready():
+                    self.get_logger().info('Waiting for pick_block (pick_node serve:=true)...', throttle_duration_sec=2.0)
+                    return
+                self.get_logger().info('Picking the block...')
+                self.pick_future = self.pick_client.call_async(Trigger.Request())
+            elif self.pick_future.done():
+                result = self.pick_future.result()
+                self.pick_future = None
+                if result is not None and result.success:
+                    self.get_logger().info(f'pick: {result.message}')
+                    self.state = State.WAIT_POSES if self.pick_in_place else State.NAV_TO_GOAL
+                else:
+                    self.get_logger().error(f'pick failed: {result.message if result is not None else "no reply"}')
+                    self.state = State.FAILED
 
         elif self.state is State.NAV_TO_GOAL:
             if self.end_at_start_yaw:
@@ -277,14 +229,27 @@ class NavManager(Node):
             self.get_logger().error('Failed.')
             self.finished = True
 
-    def use_preset_block(self):
-        self.block_position = list(self.preset_block_position)
-        self.block_yaw = 0.0
+    def amcl_pose_callback(self, msg):
+        # amcl_pose is only published once AMCL has run a filter update on a scan
+        if self.start_pose_sends > 0:
+            self.amcl_pose_seen = True
 
     def set_start_pose(self):
+        # Every initialpose message resets AMCL's particle filter, and map->odom is only published after a
+        # scan update on the new filter. Re-sending at the 10 Hz timer rate keeps resetting it before that
+        # can happen, so send slowly and wait for AMCL (a subscriber on initialpose, i.e. active) first.
+        now = self.get_clock().now().nanoseconds / 1e9
+        if self.initial_pose_pub.get_subscription_count() == 0:
+            self.get_logger().info('Waiting for AMCL to subscribe to initialpose...', throttle_duration_sec=2.0)
+            return
+        if self.start_pose_sent_at is not None and now - self.start_pose_sent_at < 3.0:
+            return
+        self.start_pose_sent_at = now
+        self.start_pose_sends += 1
         x, y, yaw = (float(v) for v in self.start_pose)
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = 'map'
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.pose.pose.position.x = x
         msg.pose.pose.position.y = y
         msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
@@ -292,26 +257,34 @@ class NavManager(Node):
         msg.pose.covariance[0] = msg.pose.covariance[7] = 0.02
         msg.pose.covariance[35] = 0.01
         self.initial_pose_pub.publish(msg)
-        self.get_logger().info(f'Set start pose {self.start_pose}', throttle_duration_sec=1.0)
+        self.get_logger().info(f'Set start pose {self.start_pose} (send #{self.start_pose_sends}); '
+                               'waiting for map->base_link TF')
 
     def init_stow(self):
         now = self.get_clock().now().nanoseconds / 1e9
-        if self.stow_sent_at is None:
+        # Send, then re-send every 1.5 s until ik_node confirms (ik_result) and at least 2 sends went out. The
+        # first message can be lost if arm_control has not matched ik_node's forward_topic yet; re-sending is harmless.
+        if self.stow_sent_at is None or (now - self.stow_sent_at > 1.5 and self.stow_sends < self.STOW_MAX_SENDS
+                                         and (self.ik_ok is not True or self.stow_sends < 2)):
             if self.stow_pub.get_subscription_count() == 0:
                 self.get_logger().info('Waiting for ik_node...' , throttle_duration_sec=2.0)
                 return
+            self.ik_ok = None
             self.stow_pub.publish(TargetPose(x=STOW_XYZ[0], y=STOW_XYZ[1], z=STOW_XYZ[2], roll=0.0,
                                              pitch=STOW_PITCH, duration=2.0))
             self.stow_sent_at = now
-            self.get_logger().info('Stowing arm...')
+            self.stow_sends += 1
+            self.get_logger().info(f'Stowing arm (send #{self.stow_sends})...')
         elif now - self.stow_sent_at > 3.0:
+            if self.ik_ok is False:
+                self.get_logger().error('ik_node rejected the stow pose (unreachable?); continuing anyway.')
             if self.pick_in_place:
-                self.state = State.LOOK
+                self.state = State.PICK
             else:
                 self.state = State.WAIT_POSES if self.wait_for_clicks_enabled else State.NAV_TO_BLOCK
 
     def clicked_point_callback(self, msg):
-        accepted = (State.INIT, State.WAIT_POSES, State.LOOK, State.DETECT, State.PICK) if self.pick_in_place \
+        accepted = (State.INIT, State.WAIT_POSES, State.PICK) if self.pick_in_place \
             else (State.INIT, State.WAIT_POSES)
         if self.state not in accepted + (State.IDLE,):
             return
@@ -467,16 +440,8 @@ class NavManager(Node):
         else:
             msg = getattr(wrapped.result, 'message', '')
             self.get_logger().error(f'{label}: failed (status {wrapped.status}) {msg}')
-            if label == 'pick' and self.pick_attempts + 1 < PICK_MAX_ATTEMPTS:
-                # The gripper came up empty (or the target was out of reach): look at the floor again and retry
-                self.pick_attempts += 1
-                self.get_logger().warn(
-                    f'Looking for the block again (pick attempt {self.pick_attempts + 1}/{PICK_MAX_ATTEMPTS})')
-                self.look_sent_at = None
-                self.state = State.LOOK
-            else:
-                # A failed idle drive just returns to idle so another point can be clicked
-                self.state = State.IDLE if label == 'navigate to clicked point' else State.FAILED
+            # A failed idle drive just returns to idle so another point can be clicked
+            self.state = State.IDLE if label == 'navigate to clicked point' else State.FAILED
 
         self.BUSY = False
 

@@ -10,20 +10,17 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from rosbot_arm.armConfig import GRASP_Z
-
 PICK_IN_PLACE = True
 START_POSE = [-1.3965, 0.1878, -0.8135]  # measured from /amcl_pose after an RViz 2D Pose Estimate
-START_POSE_ONE = False
+START_POSE_ONE = True
 PICK_YAW = 0.0
 PLACE_YAW = 3.14
 
-# Arm targets (m, from the joint 1 axis, z = floor) used by the Pick / Place actions. The pick x, y is replaced by
-# where the camera sees the red block; these are the fallback when it is not seen.
-BLOCK_POSITION = [0.2, 0.0, GRASP_Z]
+# Arm target (m, from the joint 1 axis, z = floor) the Place action drops the block at. Picking is pick_node's job:
+# it finds the red block with the camera.
 PLACE_POSITION = [0.0, -0.2, 0.00]
 
-FINAL_POSE = [5.45, -8.6, -0.869077]
+FINAL_POSE = [5.5, -9.0, -0.869077]
 FINAL_POSE_ONE = True
 END_AT_START_YAW = True
 
@@ -67,6 +64,10 @@ def generate_launch_description():
     # and a second joint state source only makes the two fight.
     vision_params = os.path.join(
         get_package_share_directory('rosbot_vision'), 'config', 'vision_params.yaml')
+    pick_node = Node(
+        package='rosbot_arm', executable='pick_node', name='pick_node', output='screen',
+        parameters=[{'serve': True}])
+
     vision_node = Node(
         package='rosbot_vision', executable='vision_node', name='vision_node', output='screen',
         parameters=[vision_params])
@@ -83,7 +84,6 @@ def generate_launch_description():
             'face_travel_direction': True,
             'block_nav_pose': [0.0, 0.0, PICK_YAW],
             'goal_position': [0.0, 0.0, PLACE_YAW],
-            'block_position': BLOCK_POSITION,
             'place_position': PLACE_POSITION,
             'final_pose': FINAL_POSE,
             'end_at_start_yaw': END_AT_START_YAW,
@@ -102,6 +102,7 @@ def generate_launch_description():
         arm_control,
         ik_node,
         vision_node,
+        pick_node,
         nav_manager,
     ])
 
