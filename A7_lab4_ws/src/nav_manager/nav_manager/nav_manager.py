@@ -12,7 +12,7 @@ from action_msgs.msg import GoalStatus
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import Twist, Point, PointStamped, PoseStamped, PoseWithCovarianceStamped
-from rcl_interfaces.msg import SetParametersResult
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
 from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav2_msgs.action import NavigateToPose
@@ -37,6 +37,8 @@ class State(Enum):
     IDLE = 9
     NAV_IDLE = 10
     NAV_TO_REACH = 11  # driving to where the arm can reach a block it could not from where it was
+    NEXT_POSE = 12     # one block is done: take the next search pose, if any
+    NAV_TO_SEARCH = 13  # driving to a search pose to look for the next block
 
 class NavManager(Node):
     STOW_MAX_SENDS = 4
@@ -68,6 +70,17 @@ class NavManager(Node):
         self.find_future = None
         self.reach_checked = False
         self.reach_pose = None
+
+        # More blocks: after the first pick-and-place, visit each of these [x, y, yaw] map poses (flat list, 3 numbers
+        # each), pick a block there and bring it to the same drop-off. Empty (the default) = one block, as before.
+        self.declare_parameter('search_poses', [], ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE_ARRAY))
+        flat = [float(v) for v in self.get_parameter('search_poses').value]
+        if len(flat) % 3 != 0:
+            self.get_logger().error(f'search_poses needs 3 numbers per pose, got {len(flat)}; ignoring it.')
+            flat = []
+        self.search_poses = [flat[i:i + 3] for i in range(0, len(flat), 3)]
+        self.pose_idx = 0
+        self.searching = False  # True once the first block is done and the search poses are being visited
 
         self.declare_parameter('final_pose', [0.0, 0.0, 0.0])
         self.declare_parameter('finalPoseOne', False)
@@ -184,11 +197,29 @@ class NavManager(Node):
                     self.state = State.WAIT_POSES if self.pick_in_place else State.NAV_TO_GOAL
                 else:
                     self.get_logger().error(f'pick failed: {result.message if result is not None else "no reply"}')
-                    self.state = State.FAILED
+                    self.state = self.failure_state('pick')
 
         elif self.state is State.NAV_TO_REACH:
             self.send_goal(self.nav_client, self.make_nav_goal(self.reach_pose),
                            State.PICK, 'navigate to reach block')
+
+        elif self.state is State.NEXT_POSE:
+            self.reach_checked = False
+            self.nav_retries = 0
+            if self.pose_idx >= len(self.search_poses):
+                self.get_logger().info('All search poses done.')
+                self.state = State.IDLE
+                return
+            self.searching = True
+            x, y, yaw = self.search_poses[self.pose_idx]
+            self.pose_idx += 1
+            self.get_logger().info(
+                f'Search pose {self.pose_idx}/{len(self.search_poses)}: ({x:.2f}, {y:.2f}, yaw {math.degrees(yaw):.0f} deg)')
+            self.state = State.NAV_TO_SEARCH
+
+        elif self.state is State.NAV_TO_SEARCH:
+            self.send_goal(self.nav_client, self.make_nav_goal(self.search_poses[self.pose_idx - 1]),
+                           State.PICK, 'navigate to search pose')
 
         elif self.state is State.NAV_TO_GOAL:
             if self.end_at_start_yaw:
@@ -203,7 +234,8 @@ class NavManager(Node):
         elif self.state is State.PLACE:
             goal = Place.Goal()
             goal.block = self.make_point(self.place_position)
-            self.send_goal(self.place_client, goal, State.IDLE, 'place', feedback_cb=self.arm_feedback)
+            self.send_goal(self.place_client, goal, State.NEXT_POSE if self.search_poses else State.IDLE, 'place',
+                           feedback_cb=self.arm_feedback)
 
         elif self.state is State.IDLE:
             if self.idle_click is None:
@@ -254,7 +286,7 @@ class NavManager(Node):
         self.reach_checked = True
         if result is None or not result.found:
             self.get_logger().error(f'find block failed: {result.message if result is not None else "no reply"}')
-            self.state = State.FAILED
+            self.state = self.failure_state('find')
             return
         self.get_logger().info(f'find: {result.message}')
         if result.reachable:
@@ -269,6 +301,17 @@ class NavManager(Node):
             f'Driving to ({self.reach_pose[0]:.2f}, {self.reach_pose[1]:.2f}, '
             f'yaw {math.degrees(self.reach_pose[2]):.0f} deg) to reach it')
         self.state = State.NAV_TO_REACH
+
+    def failure_state(self, label):
+        """Where to go when `label` failed. A failed idle drive goes back to idle. While visiting search poses, a
+        failure before a block is in the gripper (drive, find or pick) skips to the next pose; anything else, such
+        as the drop-off with a block in hand, stops the mission as before."""
+        if label == 'navigate to clicked point':
+            return State.IDLE
+        if self.searching and label in ('navigate to search pose', 'navigate to reach block', 'find', 'pick'):
+            self.get_logger().warn(f'{label} failed: skipping to the next search pose.')
+            return State.NEXT_POSE
+        return State.FAILED
 
     def robot_pose(self):
         try:
@@ -466,7 +509,7 @@ class NavManager(Node):
                 self.BUSY = False
                 return
             self.get_logger().error(f'{label}: goal rejected')
-            self.state = State.IDLE if label == 'navigate to clicked point' else State.FAILED
+            self.state = self.failure_state(label)
             self.BUSY = False
             return
 
@@ -484,7 +527,7 @@ class NavManager(Node):
         else:
             msg = getattr(wrapped.result, 'message', '')
             self.get_logger().error(f'{label}: failed (status {wrapped.status}) {msg}')
-            self.state = State.IDLE if label == 'navigate to clicked point' else State.FAILED
+            self.state = self.failure_state(label)
 
         self.BUSY = False
 

@@ -1,3 +1,4 @@
+import math
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -22,6 +23,14 @@ PLACE_POSITION = [0.0, -0.2, 0.00]
 FINAL_POSE = [5.4, -8.8, -0.869077]
 FINAL_POSE_ONE = True
 END_AT_START_YAW = True
+
+# After the first block, visit these [x, y, yaw] map poses, pick a block at each and bring it to the drop-off.
+# Pose 2 is a ROUGH first guess (yaw = drop-off yaw + 90 deg); check it on the map before turning this on.
+USE_SEARCH_POSES = False
+SEARCH_POSES = [
+    [4.4, -8.8, FINAL_POSE[2] + math.pi / 2],
+]
+PICK_COLORS = ['red', 'blue'] if USE_SEARCH_POSES else ['red']
 
 
 def generate_launch_description():
@@ -65,7 +74,7 @@ def generate_launch_description():
         get_package_share_directory('rosbot_vision'), 'config', 'vision_params.yaml')
     pick_node = Node(
         package='rosbot_arm', executable='pick_node', name='pick_node', output='screen',
-        parameters=[{'serve': True}])
+        parameters=[{'serve': True, 'colors': PICK_COLORS}])
 
     vision_node = Node(
         package='rosbot_vision', executable='vision_node', name='vision_node', output='screen',
@@ -90,6 +99,7 @@ def generate_launch_description():
             'finalPoseOne': ParameterValue(LaunchConfiguration('finalPoseOne'), value_type=bool),
             'start_pose': START_POSE,
             'startPoseOne': ParameterValue(LaunchConfiguration('startPoseOne'), value_type=bool),
+            **({'search_poses': [float(v) for pose in SEARCH_POSES for v in pose]} if USE_SEARCH_POSES else {}),
         }])
 
     return launch.LaunchDescription([

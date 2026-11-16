@@ -42,6 +42,10 @@ class PickNode(Node):
 
         self.declare_parameter('serve', False)
         self.serve = self.get_parameter('serve').value
+        # Block colors to pick. One color is requested from vision by name (it backs the arm up for a wider view if
+        # that color is missing). Several are requested as "any" and filtered here, so one missing color does not.
+        self.declare_parameter('colors', ['red'])
+        self.colors = list(self.get_parameter('colors').value)
 
         clients = ReentrantCallbackGroup()
         self.targetPosePublisher = self.create_publisher(TargetPose, 'inverse_topic', 10)
@@ -108,9 +112,11 @@ class PickNode(Node):
         self.wait(LOOK_MOVE_TIME + LOOK_SETTLE)
 
         for attempt in range(DETECT_ATTEMPTS):
-            result = self.waitFor(self.detectBlocksSrv.call_async(DetectBlocks.Request(colors=['red'])))
-            if result is not None and result.blocks:
-                return min(result.blocks, key=lambda b: math.hypot(b.x - (LOOK_XYZ[0] + 0.05), b.y - LOOK_XYZ[1]))
+            result = self.waitFor(self.detectBlocksSrv.call_async(
+                DetectBlocks.Request(colors=self.colors if len(self.colors) == 1 else [])))
+            blocks = [b for b in result.blocks if b.color in self.colors] if result is not None else []
+            if blocks:
+                return min(blocks, key=lambda b: math.hypot(b.x - (LOOK_XYZ[0] + 0.05), b.y - LOOK_XYZ[1]))
             self.get_logger().warn(f'No block seen (attempt {attempt + 1}/{DETECT_ATTEMPTS}), retrying.')
             self.wait(1.0)
         return None
