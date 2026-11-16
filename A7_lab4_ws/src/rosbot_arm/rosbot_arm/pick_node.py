@@ -20,11 +20,12 @@ from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Point
 from rosbot_msgs.action import Pick
 from rosbot_msgs.msg import TargetPose
-from rosbot_msgs.srv import DetectBlocks
+from rosbot_msgs.srv import DetectBlocks, FindTarget
 from std_srvs.srv import Trigger
 
-from rosbot_arm import calibration
-from rosbot_arm.armConfig import LOOK_XYZ, GRASP_Z
+from rosbot_arm import calibration, inverseKinematics
+from rosbot_arm.armConfig import LOOK_XYZ, LOOK_PITCH, GRASP_Z, gripRoll
+from rosbot_arm.ik_node import HOVER, GRASP_PITCH
 
 LOOK_MOVE_TIME = 2.0
 LOOK_SETTLE = 1.0
@@ -47,12 +48,39 @@ class PickNode(Node):
         self.detectBlocksSrv = self.create_client(DetectBlocks, 'detect_blocks', callback_group=clients)
         self.pickClient = ActionClient(self, Pick, 'pick', callback_group=clients)
         if self.serve:
-            self.create_service(Trigger, 'pick_block', self.pickBlockCallback,
-                                callback_group=MutuallyExclusiveCallbackGroup())
+            # One group for both services: the arm and the camera are used by one request at a time
+            serving = MutuallyExclusiveCallbackGroup()
+            self.create_service(Trigger, 'pick_block', self.pickBlockCallback, callback_group=serving)
+            self.create_service(FindTarget, 'find_target', self.findTargetCallback, callback_group=serving)
 
     def pickBlockCallback(self, request, response):
         response.success, response.message = self.run()
         return response
+
+    def findTargetCallback(self, request, response):
+        if request.kind != 'block':
+            response.message = f"Unknown kind '{request.kind}' (only 'block' so far)."
+            return response
+        if not self.waitForArm():
+            response.message = 'Shut down while waiting for ik_node / vision_node.'
+            return response
+        block = self.lookForBlock()
+        if block is None:
+            response.message = 'No block found.'
+            return response
+        response.found = True
+        response.x, response.y, response.yaw = float(block.x), float(block.y), float(block.yaw)
+        response.reachable = self.canPick(block)
+        response.message = (f'Block at arm ({block.x:.3f}, {block.y:.3f}); '
+                            f'{"reachable" if response.reachable else "out of reach"}.')
+        return response
+
+    def canPick(self, block):
+        """True if ik_node would accept both poses of a pick of this block from where the arm is."""
+        x, y, yaw = calibration.pickTarget(self.calibration, block.x, block.y, block.yaw)
+        roll = gripRoll(x, y, yaw)
+        return all(inverseKinematics.solveWithTilt(x, y, z, roll, GRASP_PITCH) is not None
+                   for z in (GRASP_Z + HOVER, GRASP_Z))
 
     def wait(self, seconds):
         time.sleep(seconds)
@@ -76,7 +104,7 @@ class PickNode(Node):
     def lookForBlock(self):
         """Move to the look pose and return the block nearest the middle of the view, or None."""
         self.targetPosePublisher.publish(TargetPose(
-            x=LOOK_XYZ[0], y=LOOK_XYZ[1], z=LOOK_XYZ[2], roll=0.0, pitch=-90.0, duration=LOOK_MOVE_TIME))
+            x=LOOK_XYZ[0], y=LOOK_XYZ[1], z=LOOK_XYZ[2], roll=0.0, pitch=LOOK_PITCH, duration=LOOK_MOVE_TIME))
         self.wait(LOOK_MOVE_TIME + LOOK_SETTLE)
 
         for attempt in range(DETECT_ATTEMPTS):

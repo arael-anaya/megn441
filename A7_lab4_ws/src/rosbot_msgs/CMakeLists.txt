@@ -23,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
   "msg/BlockDetection.msg"
   "srv/DetectBlocks.srv"
+  "srv/FindTarget.srv"
 
   "action/Pick.action"
   "action/Place.action"

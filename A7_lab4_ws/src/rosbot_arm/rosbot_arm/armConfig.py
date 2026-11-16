@@ -12,6 +12,7 @@ STOW_XYZ = [0.1, 0.0, 0.24]
 STOW_PITCH = -60.0
 
 LOOK_XYZ = [0.20, 0.0, 0.14]
+LOOK_PITCH = -60.0
 
 GRASP_Z = 0.0
 
@@ -24,6 +25,12 @@ BLOCK_YAW_SIGN = -1.0
 ROLL_SIGN = -1.0
 
 PICK_OFFSET = (-BLOCK_SIZE / 2, 0.0)
+
+# Where the joint 1 axis is relative to base_link (m, x forward, y left): the same point.
+ARM_BASE_OFFSET = (0.0, 0.0)
+# How far (m) ahead of the joint 1 axis nav_manager parks the robot from a block the arm cannot reach from where it
+# is: 6.5-7 in, comfortably inside the arm's reach for a floor pick.
+ARM_STANDOFF = 0.1
 
 
 def towardBase(x, y, distance):

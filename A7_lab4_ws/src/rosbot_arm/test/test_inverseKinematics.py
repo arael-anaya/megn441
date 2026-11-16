@@ -32,3 +32,24 @@ def test_roll_passes_through_to_joint_5():
 
 def test_out_of_reach_returns_none():
     assert ik.solveIK(1.0, 0.0, 0.0, 0.0, -90.0, 1) is None
+
+
+def test_solve_with_tilt_matches_straight_down_when_it_fits():
+    pulses, pitch = ik.solveWithTilt(0.20, 0.0, 0.14, 0.0, -90.0)
+    assert pitch == -90.0
+    assert pulses == ik.solvePulses(0.20, 0.0, 0.14, 0.0, -90.0)
+
+
+def test_solve_with_tilt_tilts_when_straight_down_fails():
+    # Low and far: straight down leaves the wrist out of reach, a tilted gripper fits (same fallback as ik_node)
+    for r in np.arange(0.15, 0.40, 0.01):
+        if ik.solvePulses(r, 0.0, 0.0, 0.0, -90.0) is None:
+            result = ik.solveWithTilt(r, 0.0, 0.0, 0.0, -90.0)
+            if result is not None:
+                assert result[1] > -90.0
+                return
+    raise AssertionError('no radius found where tilting helps')
+
+
+def test_solve_with_tilt_none_when_out_of_reach():
+    assert ik.solveWithTilt(1.0, 0.0, 0.0, 0.0, -90.0) is None

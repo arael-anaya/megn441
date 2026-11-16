@@ -78,6 +78,18 @@ def solvePulses(x, y, z, roll, pitch):
     return None
 
 
+def solveWithTilt(x, y, z, roll, pitch):
+    """(pulses, pitch used) for the pose, or None. Straight down (-90) puts the wrist ~0.17 m above the tip, which
+    leaves low targets beyond ~0.15 m out of reach, so if the requested pitch fails the gripper is tilted toward
+    horizontal (-80 .. -30, in 5 degree steps) until it fits. This is what ik_node accepts, so use it to ask
+    "would ik_node take this pose?"."""
+    for p in [pitch] + [p for p in range(-80, -29, 5) if p > pitch]:
+        pulses = solvePulses(x, y, z, roll, p)
+        if pulses is not None:
+            return pulses, p
+    return None
+
+
 def solveFK(jointAngles):
     """Inverse of solveIK: servo angles (deg, as solveIK returns them) -> (x, y, z, roll, pitch), angles in deg."""
     a = np.deg2rad(jointAngles)

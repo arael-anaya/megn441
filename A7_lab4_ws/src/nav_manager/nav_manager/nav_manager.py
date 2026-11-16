@@ -18,7 +18,9 @@ from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav2_msgs.action import NavigateToPose
 from rosbot_msgs.action import Place
 from rosbot_msgs.msg import TargetPose
-from rosbot_arm.armConfig import STOW_XYZ, STOW_PITCH
+from rosbot_msgs.srv import FindTarget
+from rosbot_arm.armConfig import STOW_XYZ, STOW_PITCH, ARM_BASE_OFFSET, ARM_STANDOFF
+from nav_manager.geometry import standoff_pose
 from rclpy.time import Time
 import tf2_ros
 
@@ -34,6 +36,7 @@ class State(Enum):
     WAIT_POSES = 8
     IDLE = 9
     NAV_IDLE = 10
+    NAV_TO_REACH = 11  # driving to where the arm can reach a block it could not from where it was
 
 class NavManager(Node):
     STOW_MAX_SENDS = 4
@@ -57,6 +60,14 @@ class NavManager(Node):
 
         self.declare_parameter('pick_in_place', False)
         self.pick_in_place = self.get_parameter('pick_in_place').value
+
+        # Look for the block before picking and, if the arm cannot reach it from here, drive to where it can
+        self.declare_parameter('drive_to_block', False)
+        self.drive_to_block = self.get_parameter('drive_to_block').value
+        self.find_client = self.create_client(FindTarget, 'find_target')  # pick_node serve:=true
+        self.find_future = None
+        self.reach_checked = False
+        self.reach_pose = None
 
         self.declare_parameter('final_pose', [0.0, 0.0, 0.0])
         self.declare_parameter('finalPoseOne', False)
@@ -155,6 +166,9 @@ class NavManager(Node):
                      State.PICK, 'navigate to block')
 
         elif self.state is State.PICK:
+            if self.drive_to_block and not self.reach_checked:
+                self.check_reach()
+                return
             if self.pick_future is None:
                 if not self.pick_client.service_is_ready():
                     self.get_logger().info('Waiting for pick_block (pick_node serve:=true)...', throttle_duration_sec=2.0)
@@ -166,10 +180,15 @@ class NavManager(Node):
                 self.pick_future = None
                 if result is not None and result.success:
                     self.get_logger().info(f'pick: {result.message}')
+                    self.reach_checked = False
                     self.state = State.WAIT_POSES if self.pick_in_place else State.NAV_TO_GOAL
                 else:
                     self.get_logger().error(f'pick failed: {result.message if result is not None else "no reply"}')
                     self.state = State.FAILED
+
+        elif self.state is State.NAV_TO_REACH:
+            self.send_goal(self.nav_client, self.make_nav_goal(self.reach_pose),
+                           State.PICK, 'navigate to reach block')
 
         elif self.state is State.NAV_TO_GOAL:
             if self.end_at_start_yaw:
@@ -217,6 +236,48 @@ class NavManager(Node):
         elif self.state is State.FAILED:
             self.get_logger().error('Failed.')
             self.finished = True
+
+    def check_reach(self):
+        """Ask pick_node to look for the block and say whether the arm can reach it from here. If not, plan a drive
+        to where it can (NAV_TO_REACH, then PICK as usual). Called each tick from PICK until it has an answer."""
+        if self.find_future is None:
+            if not self.find_client.service_is_ready():
+                self.get_logger().info('Waiting for find_target (pick_node serve:=true)...', throttle_duration_sec=2.0)
+                return
+            self.get_logger().info('Looking for the block to check it is in reach...')
+            self.find_future = self.find_client.call_async(FindTarget.Request(kind='block'))
+            return
+        if not self.find_future.done():
+            return
+        result = self.find_future.result()
+        self.find_future = None
+        self.reach_checked = True
+        if result is None or not result.found:
+            self.get_logger().error(f'find block failed: {result.message if result is not None else "no reply"}')
+            self.state = State.FAILED
+            return
+        self.get_logger().info(f'find: {result.message}')
+        if result.reachable:
+            return  # the next tick picks
+        robot = self.robot_pose()
+        if robot is None:
+            self.get_logger().warn('Block is out of reach but there is no map->base_link TF to plan a drive; '
+                                   'trying to pick from here.')
+            return
+        self.reach_pose = standoff_pose(robot, (result.x, result.y), ARM_STANDOFF, ARM_BASE_OFFSET)
+        self.get_logger().info(
+            f'Driving to ({self.reach_pose[0]:.2f}, {self.reach_pose[1]:.2f}, '
+            f'yaw {math.degrees(self.reach_pose[2]):.0f} deg) to reach it')
+        self.state = State.NAV_TO_REACH
+
+    def robot_pose(self):
+        try:
+            t = self.tf_buffer.lookup_transform('map', 'base_link', Time())
+        except tf2_ros.TransformException:
+            return None
+        q = t.transform.rotation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        return (t.transform.translation.x, t.transform.translation.y, yaw)
 
     def amcl_pose_callback(self, msg):
         if self.start_pose_sends > 0:

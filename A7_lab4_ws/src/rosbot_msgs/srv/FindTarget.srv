@@ -1,0 +1,11 @@
+# What to look for: "block" (a red block on the floor); "bucket" is added later
+string kind
+---
+bool found
+# True if ik_node would accept the pick (or place) pose for it from where the arm is now
+bool reachable
+# Where the target is, in the arm frame (m, x forward from the joint 1 axis, y left), and its edge direction (rad)
+float64 x
+float64 y
+float64 yaw
+string message

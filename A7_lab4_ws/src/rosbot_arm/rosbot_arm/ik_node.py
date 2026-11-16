@@ -50,13 +50,13 @@ class IKNode(Node):
 
     def sendPose(self, pose):
         """Send the servos to a TargetPose. Returns False, sending nothing, if it cannot be reached."""
-        for pitch in [pose.pitch] + [p for p in range(-80, -29, 5) if p > pose.pitch]:
-            pulses = inverseKinematics.solvePulses(pose.x, pose.y, pose.z, pose.roll, pitch)
-            if pulses is not None:
-                if pitch != pose.pitch:
-                    self.get_logger().info(f'Target needed pitch {pitch} instead of {pose.pitch}.')
-                self.forwardPosePublisher.publish(ForwardPose(ids=JOINT_IDS, pulses=pulses, duration=pose.duration))
-                return True
+        solution = inverseKinematics.solveWithTilt(pose.x, pose.y, pose.z, pose.roll, pose.pitch)
+        if solution is not None:
+            pulses, pitch = solution
+            if pitch != pose.pitch:
+                self.get_logger().info(f'Target needed pitch {pitch} instead of {pose.pitch}.')
+            self.forwardPosePublisher.publish(ForwardPose(ids=JOINT_IDS, pulses=pulses, duration=pose.duration))
+            return True
         self.get_logger().warn(
             f'Target ({pose.x:.3f}, {pose.y:.3f}, {pose.z:.3f}) pitch={pose.pitch} '
             'is unreachable or outside joint limits. Not sending.')

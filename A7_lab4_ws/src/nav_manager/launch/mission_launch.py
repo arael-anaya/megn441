@@ -11,14 +11,15 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 PICK_IN_PLACE = True
-START_POSE = [-1.3965, 0.1878, -0.8135]
+DRIVE_TO_BLOCK = False  # look first; if the block is out of the arm's reach, drive until it is in reach
+START_POSE = [-1.3965, 0.1878, -0.8135] #-1.3965
 START_POSE_ONE = True
 PICK_YAW = 0.0
 PLACE_YAW = 3.14
 
 PLACE_POSITION = [0.0, -0.2, 0.00]
 
-FINAL_POSE = [5.5, -9.0, -0.869077]
+FINAL_POSE = [5.4, -8.8, -0.869077]
 FINAL_POSE_ONE = True
 END_AT_START_YAW = True
 
@@ -36,6 +37,9 @@ def generate_launch_description():
     pick_in_place_arg = DeclareLaunchArgument(
         'pick_in_place', default_value=str(PICK_IN_PLACE).lower(),
         description='Pick at the start spot, then drive to one drop point')
+    drive_to_block_arg = DeclareLaunchArgument(
+        'drive_to_block', default_value=str(DRIVE_TO_BLOCK).lower(),
+        description="If the block is out of the arm's reach, drive to where it is in reach before picking")
     final_pose_one_arg = DeclareLaunchArgument(
         'finalPoseOne', default_value=str(FINAL_POSE_ONE).lower(),
         description='Drive to the hardcoded FINAL_POSE instead of waiting for a drop click')
@@ -76,6 +80,7 @@ def generate_launch_description():
         parameters=[{
             'wait_for_clicks': True,
             'pick_in_place': ParameterValue(LaunchConfiguration('pick_in_place'), value_type=bool),
+            'drive_to_block': ParameterValue(LaunchConfiguration('drive_to_block'), value_type=bool),
             'face_travel_direction': True,
             'block_nav_pose': [0.0, 0.0, PICK_YAW],
             'goal_position': [0.0, 0.0, PLACE_YAW],
@@ -91,6 +96,7 @@ def generate_launch_description():
         start_nav_arg,
         start_arm_arg,
         pick_in_place_arg,
+        drive_to_block_arg,
         final_pose_one_arg,
         start_pose_one_arg,
         nav_stack,

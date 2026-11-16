@@ -29,7 +29,7 @@ from rosbot_vision.locateBlock import locate_block
 from rosbot_vision.depthUtils import depth_to_meters, quat_to_matrix, fit_table_plane, level_rotation
 
 from rosbot_arm import inverseKinematics
-from rosbot_arm.armConfig import LOOK_XYZ, BLOCK_SIZE
+from rosbot_arm.armConfig import LOOK_XYZ, LOOK_PITCH, BLOCK_SIZE
 
 DEPTH_SCALE = 0.001
 MAX_PAIR_GAP = 0.1
@@ -213,7 +213,7 @@ class VisionNode(Node):
         self.get_logger().warn(
             f'No arm command seen since this node started and the servos could not be read; assuming the arm is at '
             f'the look pose {LOOK_XYZ}. Positions are wrong if it is anywhere else.')
-        pulses = inverseKinematics.solvePulses(*LOOK_XYZ, 0.0, -90.0)
+        pulses = inverseKinematics.solvePulses(*LOOK_XYZ, 0.0, LOOK_PITCH)
         return cameraModel.pulses_to_angles(dict(zip(cameraModel.ARM_JOINTS, pulses))), 'assumed look pose'
 
     def extrinsic(self):
