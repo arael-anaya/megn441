@@ -11,9 +11,8 @@ from rosbot_msgs.action import Pick, Place
 from rosbot_msgs.msg import TargetPose, ForwardPose, GripperControl
 from rosbot_msgs.srv import GetAngles
 
-from rosbot_arm import inverseKinematics
-from rosbot_arm.armConfig import (GRIPPER_ID, GRIPPER_OPEN, GRIPPER_CLOSED, GRIPPER_EMPTY_MARGIN, STOW_XYZ,
-                                  STOW_PITCH, gripRoll)
+from rosbot_arm import calibration, inverseKinematics
+from rosbot_arm.armConfig import GRIPPER_ID, GRIPPER_EMPTY_MARGIN, STOW_XYZ, STOW_PITCH, gripRoll
 
 JOINT_IDS = [1, 2, 3, 4, 5]
 GRASP_PITCH = -90.0
@@ -98,9 +97,10 @@ class IKNode(Node):
         if pulse is None:
             self.get_logger().warn('Could not read the gripper servo; assuming it is holding the block.')
             return True
-        holding = pulse <= GRIPPER_CLOSED - GRIPPER_EMPTY_MARGIN
+        closed = calibration.robotSettings()['gripper_closed']
+        holding = pulse <= closed - GRIPPER_EMPTY_MARGIN
         self.get_logger().info(
-            f'Gripper stopped at pulse {pulse} (sent to {GRIPPER_CLOSED}): '
+            f'Gripper stopped at pulse {pulse} (sent to {closed}): '
             f'{"holding a block" if holding else "EMPTY, the grasp missed"}.')
         return holding
 
@@ -153,11 +153,12 @@ class IKNode(Node):
         roll = gripRoll(b.x, b.y, goalHandle.request.yaw)
         self.get_logger().info(
             f'Pick at IK target ({b.x:.3f}, {b.y:.3f}, {b.z:.3f}), gripper roll {roll:.1f} deg.')
+        robot = calibration.robotSettings()
         return self.runSteps(goalHandle, Pick, [
-            ('opening gripper', lambda: self.moveGripper(GRIPPER_OPEN)),
+            ('opening gripper', lambda: self.moveGripper(robot['gripper_open'])),
             ('hovering over block', lambda: self.moveTo(b.x, b.y, b.z + HOVER, roll=roll)),
             ('descending', lambda: self.moveTo(b.x, b.y, b.z, roll=roll)),
-            ('grasping', lambda: self.moveGripper(GRIPPER_CLOSED)),
+            ('grasping', lambda: self.moveGripper(robot['gripper_closed'])),
             ('lifting', lambda: self.moveTo(b.x, b.y, b.z + HOVER, roll=roll)),
             ('checking the grasp', self.holdingBlock),
             ('stowing', self.stow),
@@ -165,10 +166,11 @@ class IKNode(Node):
 
     def executePlace(self, goalHandle):
         t = goalHandle.request.block
+        openPulse = calibration.robotSettings()['gripper_open']
         return self.runSteps(goalHandle, Place, [
             ('moving over target', lambda: self.moveTo(t.x, t.y, t.z + HOVER)),
             ('lowering', lambda: self.moveTo(t.x, t.y, t.z)),
-            ('releasing', lambda: self.moveGripper(GRIPPER_OPEN)),
+            ('releasing', lambda: self.moveGripper(openPulse)),
             ('retreating', lambda: self.moveTo(t.x, t.y, t.z + HOVER)),
             ('stowing', self.stow),
         ])

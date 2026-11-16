@@ -14,7 +14,6 @@ from launch.substitutions import LaunchConfiguration
 from launch.actions import OpaqueFunction
 from launch_ros.actions import Node
 
-from rosbot_arm.armConfig import GRASP_Z
 
 
 def makeNodes(context):
@@ -24,21 +23,21 @@ def makeNodes(context):
     freely (recalibrate afterwards).
     """
     lookXyz = [float(LaunchConfiguration(f'look_{a}').perform(context)) for a in 'xyz']
+    graspZ = LaunchConfiguration('grasp_z').perform(context)
     print(f'[stack_launch] look pose (IK target, gripper down) {lookXyz}, '
-          f'grasp_z {LaunchConfiguration("grasp_z").perform(context)}')
+          f'grasp_z {graspZ or "(from calibration)"}')
 
     executable = 'calibrate_node' if LaunchConfiguration('mode').perform(context) == 'calibrate' else 'stacker_node'
+    params = {'look_xyz': lookXyz, 'look_duration': float(LaunchConfiguration('look_duration').perform(context))}
+    if graspZ:
+        params['grasp_z'] = float(graspZ)
 
     stacker_node = TimerAction(
         period=5.0,
         actions=[Node(
             package='rosbot_arm', executable=executable, name=executable,
             output='screen', on_exit=launch.actions.Shutdown(),
-            parameters=[{
-                'look_xyz': lookXyz,
-                'grasp_z': float(LaunchConfiguration('grasp_z').perform(context)),
-                'look_duration': float(LaunchConfiguration('look_duration').perform(context)),
-            }])])
+            parameters=[params])])
 
     return [stacker_node]
 
@@ -61,9 +60,9 @@ def generate_launch_description():
         DeclareLaunchArgument('look_x', default_value='0.20', description='look pose tool x (m)'),
         DeclareLaunchArgument('look_y', default_value='0.0', description='look pose tool y (m)'),
         DeclareLaunchArgument('look_z', default_value='0.14', description='look pose tool z (m), >= 0.13 for depth'),
-        DeclareLaunchArgument('grasp_z', default_value=str(GRASP_Z),
-                              description='gripper close height (m) for picks and calibration; the fingertips must '
-                              'stay just clear of the floor (armConfig.GRASP_Z)'),
+        DeclareLaunchArgument('grasp_z', default_value='',
+                              description='override the gripper close height (m); empty uses what mode:=calibrate '
+                              'measured on this robot'),
         DeclareLaunchArgument('look_duration', default_value='1.25', description='seconds to reach look pose'),
     ]
 

@@ -27,7 +27,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'nav_manager = nav_manager.nav_manager:main'
+            'nav_manager = nav_manager.nav_manager:main',
+            'map_updater = nav_manager.map_updater:main',
         ],
     },
 )

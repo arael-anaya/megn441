@@ -24,7 +24,7 @@ from rosbot_msgs.srv import DetectBlocks, FindTarget
 from std_srvs.srv import Trigger
 
 from rosbot_arm import calibration, inverseKinematics
-from rosbot_arm.armConfig import LOOK_XYZ, LOOK_PITCH, GRASP_Z, gripRoll
+from rosbot_arm.armConfig import LOOK_XYZ, LOOK_PITCH, gripRoll
 from rosbot_arm.ik_node import HOVER, GRASP_PITCH
 
 LOOK_MOVE_TIME = 2.0
@@ -85,8 +85,9 @@ class PickNode(Node):
         """True if ik_node would accept both poses of a pick of this block from where the arm is."""
         x, y, yaw = calibration.pickTarget(self.calibration, block.x, block.y, block.yaw)
         roll = gripRoll(x, y, yaw)
+        graspZ = calibration.robotSettings()['grasp_z']
         return all(inverseKinematics.solveWithTilt(x, y, z, roll, GRASP_PITCH) is not None
-                   for z in (GRASP_Z + HOVER, GRASP_Z))
+                   for z in (graspZ + HOVER, graspZ))
 
     def wait(self, seconds):
         time.sleep(seconds)
@@ -138,7 +139,7 @@ class PickNode(Node):
             f'Picking the {block.color} block: camera ({block.x:.3f}, {block.y:.3f}) -> IK target ({x:.3f}, {y:.3f}), '
             f'block yaw {math.degrees(yaw):.0f} deg')
         goal = Pick.Goal()
-        goal.block = Point(x=float(x), y=float(y), z=float(GRASP_Z))
+        goal.block = Point(x=float(x), y=float(y), z=float(calibration.robotSettings()['grasp_z']))
         goal.yaw = float(yaw)
 
         future = self.pickClient.send_goal_async(

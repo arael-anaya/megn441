@@ -39,7 +39,11 @@ CAMERA_LINK_FRAME = 'depth_cam_link'
 
 ARM_SETTLE = 0.7
 ARM_WAIT_MAX = 10.0
-PLANE_MAX_HEIGHT_ERROR = 0.04
+# How far (m) the floor seen in depth may be from where the arm model puts it before it is not believed. The model's
+# camera height is off by a robot-dependent amount (measured on one robot: model 0.247 m, ruler 0.178 m at the look pose;
+# depth 0.304 m vs model 0.350 m raised), so this is wide: depth is the better source of the camera height. It is still
+# narrow enough that a wall or table far from the floor is not taken for it.
+PLANE_MAX_HEIGHT_ERROR = 0.10
 
 RAISE_MIN_RADIUS = 0.08
 RAISE_MARGIN = 0.01

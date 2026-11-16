@@ -6,10 +6,10 @@ from rclpy.node import Node
 
 from std_msgs.msg import Bool
 from rosbot_msgs.msg import TargetPose, GripperControl
-from rosbot_msgs.srv import DetectBlocks
+from rosbot_msgs.srv import DetectBlocks, GetAngles
 
 from rosbot_arm import calibration
-from rosbot_arm.armConfig import (BLOCK_SIZE, CAMERA_AHEAD, GRIPPER_OPEN, GRIPPER_CLOSED, LOOK_XYZ, GRASP_Z,
+from rosbot_arm.armConfig import (BLOCK_SIZE, CAMERA_AHEAD, GRIPPER_ID, GRIPPER_EMPTY_MARGIN, LOOK_XYZ,
                                   REACH_ERROR, towardBase, gripRoll)
 
 STACK_ORDER = ['red', 'green', 'blue']
@@ -37,11 +37,21 @@ class StackerNode(Node):
 
         self.declare_parameter('look_xyz', LOOK_XYZ)
         self.declare_parameter('look_duration', 1.25)
-        self.declare_parameter('grasp_z', GRASP_Z)
+        self.declare_parameter('grasp_z', float('nan'))   # nan: use what calibration measured on this robot
 
         self.lookXyz = [float(v) for v in self.get_parameter('look_xyz').value]
         self.lookDuration = float(self.get_parameter('look_duration').value)
+
+        # Gripper pulses and grasp height are per robot: calibrate_node measures them, the defaults are armConfig's.
+        robot = calibration.robotSettings()
+        self.gripOpen = robot['gripper_open']
+        self.gripClosed = robot['gripper_closed']
         self.graspZ = float(self.get_parameter('grasp_z').value)
+        if math.isnan(self.graspZ):
+            self.graspZ = robot['grasp_z']
+        self.get_logger().info(
+            f'Gripper open {self.gripOpen}, closed {self.gripClosed}, grasp z {self.graspZ:.3f} m')
+        self.getAnglesClient = self.create_client(GetAngles, 'get_angles')
 
         self.correctDetections = applyCalibration
         self.calibration = None
@@ -88,7 +98,7 @@ class StackerNode(Node):
         self.get_logger().error('ik_node / arm_control are not running (nobody on inverse_topic or gripper_topic).')
         return False
 
-    def detectBlocks(self, wanted, height=0.0, correct=True):
+    def detectBlocks(self, wanted, height=0.0, correct=True, noRaise=False):
         """Ask the vision node for blocks until every color in `wanted` is seen or the attempts run out.
         `height` is how far above the floor their undersides are (a stack). Returns {color: BlockDetection} in arm
         coordinates, possibly missing some colors; `correct` turns them into IK targets for picking."""
@@ -99,7 +109,8 @@ class StackerNode(Node):
 
         blocks = {}
         for attempt in range(DETECT_ATTEMPTS):
-            future = self.detectBlocksSrv.call_async(DetectBlocks.Request(colors=list(wanted), height=float(height)))
+            future = self.detectBlocksSrv.call_async(DetectBlocks.Request(colors=list(wanted), height=float(height),
+                                                                         no_raise=bool(noRaise)))
             rclpy.spin_until_future_complete(self, future)
             result = future.result()
             if result is not None:
@@ -118,6 +129,27 @@ class StackerNode(Node):
         msg.duration = 0.4
         self.gripperControlPublisher.publish(msg)
         self.wait(msg.duration + SETTLE_TIME)
+
+    def gripperPulse(self):
+        """Where the gripper servo really is (pulse), or None if it cannot be read."""
+        for _ in range(3):
+            if not self.getAnglesClient.wait_for_service(timeout_sec=1.0):
+                return None
+            future = self.getAnglesClient.call_async(GetAngles.Request())
+            rclpy.spin_until_future_complete(self, future, timeout_sec=1.5)
+            if future.done() and future.result() is not None:
+                pulses = dict(zip(future.result().ids, future.result().pulses))
+                if GRIPPER_ID in pulses:
+                    return int(pulses[GRIPPER_ID])
+        return None
+
+    def isHolding(self, command=None):
+        """True / False if the closed gripper has a block between the fingers (it stops short of `command`), None if
+        the servo cannot be read."""
+        pulse = self.gripperPulse()
+        if pulse is None:
+            return None
+        return pulse <= (command or self.gripClosed) - GRIPPER_EMPTY_MARGIN
 
     def sendPose(self, x, y, z, rollDeg, duration):
         """Command the tool to exactly (x, y, z), pointing straight down, and wait until it gets there."""
@@ -189,12 +221,12 @@ class StackerNode(Node):
             f'Picking {block.color} at ({block.x:.3f}, {block.y:.3f}, {self.graspZ:.3f}) roll {pickRoll:.1f} deg '
             f'(block yaw {math.degrees(block.yaw):.1f}), placing at ({placeX:.3f}, {placeY:.3f}, {placeZ:.3f})')
 
-        self.moveGripper(GRIPPER_OPEN)
-        self.touchDown(block.x, block.y, self.graspZ, pickRoll, lambda: self.moveGripper(GRIPPER_CLOSED),
+        self.moveGripper(self.gripOpen)
+        self.touchDown(block.x, block.y, self.graspZ, pickRoll, lambda: self.moveGripper(self.gripClosed),
                        move=self.moveRaw)
         self.moveRaw(block.x, block.y, travelZ, pickRoll)
         self.moveArm(placeX, placeY, travelZ, 0.0)
-        self.touchDown(placeX, placeY, placeZ, 0.0, lambda: self.moveGripper(GRIPPER_OPEN))
+        self.touchDown(placeX, placeY, placeZ, 0.0, lambda: self.moveGripper(self.gripOpen))
         self.lookAtStack(block.color, level)
 
     def lookAgain(self, color, first):
@@ -216,7 +248,7 @@ class StackerNode(Node):
         if not self.waitForSubscribers():
             return
 
-        self.moveGripper(GRIPPER_OPEN)
+        self.moveGripper(self.gripOpen)
         self.moveToLookPose()
         blocks = self.detectBlocks(STACK_ORDER)
         if not blocks:

@@ -11,7 +11,7 @@ import os
 
 import numpy as np
 
-from rosbot_arm.armConfig import PICK_OFFSET, REACH_ERROR, towardBase
+from rosbot_arm.armConfig import (PICK_OFFSET, REACH_ERROR, GRIPPER_OPEN, GRIPPER_CLOSED, GRASP_Z, towardBase)
 
 CALIBRATION_FILE = '~/.ros/block_calibration.json'
 MAPS_TO = 'ik_target_v2'
@@ -66,21 +66,53 @@ def pickTarget(calib, x, y, yawRad):
     return tx + PICK_OFFSET[0], ty + PICK_OFFSET[1], yawRad
 
 
-def save(path, A, b, lookXyz, residuals):
+def _read(path):
+    try:
+        with open(os.path.expanduser(path)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _write(path, data):
     path = os.path.expanduser(path)
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     with open(path, 'w') as f:
-        json.dump({'A': np.asarray(A).tolist(), 'b': np.asarray(b).tolist(), 'look_xyz': list(lookXyz),
-                   'maps_to': MAPS_TO, 'max_residual_m': float(np.max(residuals))}, f, indent=2)
+        json.dump(data, f, indent=2)
+
+
+def save(path, A, b, lookXyz, residuals):
+    data = _read(path)
+    data.update({'A': np.asarray(A).tolist(), 'b': np.asarray(b).tolist(), 'look_xyz': list(lookXyz),
+                 'maps_to': MAPS_TO, 'max_residual_m': float(np.max(residuals))})
+    _write(path, data)
+
+
+def saveRobot(path, gripperClosed, gripperOpen, graspZ):
+    """The hardware numbers that differ between robots (measured by calibrate_node's grip phase). Kept in the same
+    file as the camera fit and independent of the look pose."""
+    data = _read(path)
+    data['robot'] = {'gripper_closed': int(gripperClosed), 'gripper_open': int(gripperOpen),
+                     'grasp_z': float(graspZ)}
+    _write(path, data)
+
+
+def robotSettings(path=CALIBRATION_FILE):
+    """{'gripper_closed', 'gripper_open', 'grasp_z'} as measured on this robot, armConfig defaults for any missing."""
+    saved = _read(path).get('robot', {})
+    return {'gripper_closed': int(saved.get('gripper_closed', GRIPPER_CLOSED)),
+            'gripper_open': int(saved.get('gripper_open', GRIPPER_OPEN)),
+            'grasp_z': float(saved.get('grasp_z', GRASP_Z))}
 
 
 def load(path):
-    """(A, b, look_xyz) or None if there is no calibration file."""
+    """(A, b, look_xyz) or None if there is no camera fit in the calibration file."""
     path = os.path.expanduser(path)
     if not os.path.exists(path):
         return None
-    with open(path) as f:
-        data = json.load(f)
+    data = _read(path)
+    if 'A' not in data:
+        return None
     return np.array(data['A']), np.array(data['b']), data['look_xyz']
 
 

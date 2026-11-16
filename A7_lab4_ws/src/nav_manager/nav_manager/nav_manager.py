@@ -76,7 +76,7 @@ class NavManager(Node):
         # If a pick fails, creep forward pick_retry_step m along the robot's heading and try again, up to
         # pick_retries times per block (0 disables).
         self.declare_parameter('pick_retries', 2)
-        self.declare_parameter('pick_retry_step', 0.05)
+        self.declare_parameter('pick_retry_step', 0.1)
         self.pick_retries = int(self.get_parameter('pick_retries').value)
         self.retry_step = float(self.get_parameter('pick_retry_step').value)
         self.pick_attempts = 0
