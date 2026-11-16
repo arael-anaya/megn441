@@ -1,5 +1,9 @@
 # What to look for: "block" (a red block on the floor); "bucket" is added later
 string kind
+# True: look from where the arm is now instead of moving it to the look pose first, and make one attempt only
+bool keep_arm
+# True: never back the arm up for a wider view when nothing is seen
+bool no_raise
 ---
 bool found
 # True if ik_node would accept the pick (or place) pose for it from where the arm is now

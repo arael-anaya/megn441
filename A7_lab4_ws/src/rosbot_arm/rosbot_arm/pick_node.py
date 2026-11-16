@@ -68,7 +68,9 @@ class PickNode(Node):
         if not self.waitForArm():
             response.message = 'Shut down while waiting for ik_node / vision_node.'
             return response
-        block = self.lookForBlock()
+        if not request.keep_arm:
+            self.moveToLook()
+        block = self.detectBlock(1 if request.keep_arm else DETECT_ATTEMPTS, request.no_raise)
         if block is None:
             response.message = 'No block found.'
             return response
@@ -105,20 +107,29 @@ class PickNode(Node):
             self.wait(0.2)
         return False
 
-    def lookForBlock(self):
-        """Move to the look pose and return the block nearest the middle of the view, or None."""
+    def moveToLook(self):
+        """Put the arm in the look pose and wait for it to settle."""
         self.targetPosePublisher.publish(TargetPose(
             x=LOOK_XYZ[0], y=LOOK_XYZ[1], z=LOOK_XYZ[2], roll=0.0, pitch=LOOK_PITCH, duration=LOOK_MOVE_TIME))
         self.wait(LOOK_MOVE_TIME + LOOK_SETTLE)
 
-        for attempt in range(DETECT_ATTEMPTS):
+    def lookForBlock(self):
+        """Move to the look pose and return the block nearest the middle of the view, or None."""
+        self.moveToLook()
+        return self.detectBlock()
+
+    def detectBlock(self, attempts=DETECT_ATTEMPTS, noRaise=False):
+        """The block nearest the middle of the view from where the arm is now, or None. Does not move the arm
+        (unless vision backs it up for a wider view, which noRaise prevents)."""
+        for attempt in range(attempts):
             result = self.waitFor(self.detectBlocksSrv.call_async(
-                DetectBlocks.Request(colors=self.colors if len(self.colors) == 1 else [])))
+                DetectBlocks.Request(colors=self.colors if len(self.colors) == 1 else [], no_raise=noRaise)))
             blocks = [b for b in result.blocks if b.color in self.colors] if result is not None else []
             if blocks:
                 return min(blocks, key=lambda b: math.hypot(b.x - (LOOK_XYZ[0] + 0.05), b.y - LOOK_XYZ[1]))
-            self.get_logger().warn(f'No block seen (attempt {attempt + 1}/{DETECT_ATTEMPTS}), retrying.')
-            self.wait(1.0)
+            if attempt + 1 < attempts:
+                self.get_logger().warn(f'No block seen (attempt {attempt + 1}/{attempts}), retrying.')
+                self.wait(1.0)
         return None
 
     def pick(self, block):

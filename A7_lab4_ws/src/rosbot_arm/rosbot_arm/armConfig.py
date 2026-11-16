@@ -30,7 +30,7 @@ PICK_OFFSET = (-BLOCK_SIZE / 2, 0.0)
 ARM_BASE_OFFSET = (0.0, 0.0)
 # How far (m) ahead of the joint 1 axis nav_manager parks the robot from a block the arm cannot reach from where it
 # is: 6.5-7 in, comfortably inside the arm's reach for a floor pick.
-ARM_STANDOFF = 0.1
+ARM_STANDOFF = 0.08
 
 
 def towardBase(x, y, distance):

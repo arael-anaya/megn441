@@ -12,14 +12,15 @@ from action_msgs.msg import GoalStatus
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import Twist, Point, PointStamped, PoseStamped, PoseWithCovarianceStamped
-from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
+from rcl_interfaces.msg import SetParametersResult
+from rclpy.parameter import Parameter
 from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav2_msgs.action import NavigateToPose
 from rosbot_msgs.action import Place
 from rosbot_msgs.msg import TargetPose
 from rosbot_msgs.srv import FindTarget
-from rosbot_arm.armConfig import STOW_XYZ, STOW_PITCH, ARM_BASE_OFFSET, ARM_STANDOFF
+from rosbot_arm.armConfig import STOW_XYZ, STOW_PITCH, LOOK_XYZ, LOOK_PITCH, ARM_BASE_OFFSET, ARM_STANDOFF
 from nav_manager.geometry import standoff_pose
 from rclpy.time import Time
 import tf2_ros
@@ -39,6 +40,7 @@ class State(Enum):
     NAV_TO_REACH = 11  # driving to where the arm can reach a block it could not from where it was
     NEXT_POSE = 12     # one block is done: take the next search pose, if any
     NAV_TO_SEARCH = 13  # driving to a search pose to look for the next block
+    NAV_CLOSER = 14     # a pick failed: creeping slightly closer before retrying
 
 class NavManager(Node):
     STOW_MAX_SENDS = 4
@@ -71,16 +73,40 @@ class NavManager(Node):
         self.reach_checked = False
         self.reach_pose = None
 
+        # If a pick fails, creep forward pick_retry_step m along the robot's heading and try again, up to
+        # pick_retries times per block (0 disables).
+        self.declare_parameter('pick_retries', 2)
+        self.declare_parameter('pick_retry_step', 0.05)
+        self.pick_retries = int(self.get_parameter('pick_retries').value)
+        self.retry_step = float(self.get_parameter('pick_retry_step').value)
+        self.pick_attempts = 0
+        self.closer_pose = None
+
         # More blocks: after the first pick-and-place, visit each of these [x, y, yaw] map poses (flat list, 3 numbers
         # each), pick a block there and bring it to the same drop-off. Empty (the default) = one block, as before.
-        self.declare_parameter('search_poses', [], ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE_ARRAY))
-        flat = [float(v) for v in self.get_parameter('search_poses').value]
+        # Declared by type, not by an empty-list default: rclpy types an empty list as a byte array, which clashes
+        # with the float list the launch file passes.
+        self.declare_parameter('search_poses', Parameter.Type.DOUBLE_ARRAY)
+        flat = [float(v) for v in (self.get_parameter('search_poses').value or [])]
         if len(flat) % 3 != 0:
             self.get_logger().error(f'search_poses needs 3 numbers per pose, got {len(flat)}; ignoring it.')
             flat = []
         self.search_poses = [flat[i:i + 3] for i in range(0, len(flat), 3)]
         self.pose_idx = 0
         self.searching = False  # True once the first block is done and the search poses are being visited
+
+        # While driving to a search pose with the arm in the look pose, keep asking pick_node whether a block is in
+        # view. When one is, stop and drive to where the arm can reach it (a coarse sighting: the robot is moving, so
+        # PICK looks again from the new spot). A block within dropoff_exclusion m of the drop-off is the one already
+        # placed there and is ignored.
+        self.declare_parameter('scan_while_driving', False)
+        self.declare_parameter('dropoff_exclusion', 1.0)
+        self.scan_while_driving = self.get_parameter('scan_while_driving').value
+        self.dropoff_exclusion = self.get_parameter('dropoff_exclusion').value
+        self.scan_future = None
+        self.scan_robot = None
+        self.scan_reach_pose = None
+        self.scan_timer = self.create_timer(0.5, self.scan_callback)
 
         self.declare_parameter('final_pose', [0.0, 0.0, 0.0])
         self.declare_parameter('finalPoseOne', False)
@@ -194,10 +220,28 @@ class NavManager(Node):
                 if result is not None and result.success:
                     self.get_logger().info(f'pick: {result.message}')
                     self.reach_checked = False
+                    self.pick_attempts = 0
                     self.state = State.WAIT_POSES if self.pick_in_place else State.NAV_TO_GOAL
                 else:
                     self.get_logger().error(f'pick failed: {result.message if result is not None else "no reply"}')
-                    self.state = self.failure_state('pick')
+                    robot = self.robot_pose()
+                    if self.pick_attempts < self.pick_retries and robot is not None:
+                        self.pick_attempts += 1
+                        rx, ry, ryaw = robot
+                        self.closer_pose = [rx + self.retry_step * math.cos(ryaw),
+                                            ry + self.retry_step * math.sin(ryaw), ryaw]
+                        self.get_logger().warn(
+                            f'Pick failed: creeping {self.retry_step:.2f} m closer and retrying '
+                            f'({self.pick_attempts}/{self.pick_retries})')
+                        self.reach_checked = True  # do not let the reach check drive us back to the old standoff
+                        self.nav_retries = 0
+                        self.state = State.NAV_CLOSER
+                    else:
+                        self.state = self.failure_state('pick')
+
+        elif self.state is State.NAV_CLOSER:
+            self.send_goal(self.nav_client, self.make_nav_goal(self.closer_pose),
+                           State.PICK, 'navigate closer')
 
         elif self.state is State.NAV_TO_REACH:
             self.send_goal(self.nav_client, self.make_nav_goal(self.reach_pose),
@@ -205,12 +249,16 @@ class NavManager(Node):
 
         elif self.state is State.NEXT_POSE:
             self.reach_checked = False
+            self.pick_attempts = 0
             self.nav_retries = 0
             if self.pose_idx >= len(self.search_poses):
                 self.get_logger().info('All search poses done.')
                 self.state = State.IDLE
                 return
             self.searching = True
+            if self.scan_while_driving:  # drive with the camera looking at the floor
+                self.stow_pub.publish(TargetPose(x=LOOK_XYZ[0], y=LOOK_XYZ[1], z=LOOK_XYZ[2], roll=0.0,
+                                                 pitch=LOOK_PITCH, duration=2.0))
             x, y, yaw = self.search_poses[self.pose_idx]
             self.pose_idx += 1
             self.get_logger().info(
@@ -302,13 +350,43 @@ class NavManager(Node):
             f'yaw {math.degrees(self.reach_pose[2]):.0f} deg) to reach it')
         self.state = State.NAV_TO_REACH
 
+    def scan_callback(self):
+        """Runs alongside the timer_callback (which is idle while a drive is in progress)."""
+        if not self.scan_while_driving:
+            return
+        if self.state is not State.NAV_TO_SEARCH or self.active_handle is None or self.scan_reach_pose is not None:
+            self.scan_future = None  # a late answer from an earlier drive is of no use
+            return
+        if self.scan_future is None:
+            self.scan_robot = self.robot_pose()  # where the robot was when it looked
+            if self.scan_robot is None or not self.find_client.service_is_ready():
+                return
+            self.scan_future = self.find_client.call_async(FindTarget.Request(kind='block', keep_arm=True, no_raise=True))
+            return
+        if not self.scan_future.done():
+            return
+        result = self.scan_future.result()
+        self.scan_future = None
+        if result is None or not result.found:
+            return
+        rx, ry, ryaw = self.scan_robot
+        ax, ay = result.x + ARM_BASE_OFFSET[0], result.y + ARM_BASE_OFFSET[1]
+        bx = rx + math.cos(ryaw) * ax - math.sin(ryaw) * ay
+        by = ry + math.sin(ryaw) * ax + math.cos(ryaw) * ay
+        if math.hypot(bx - self.goal_nav_pose[0], by - self.goal_nav_pose[1]) < self.dropoff_exclusion:
+            return  # the block already in the drop-off
+        self.get_logger().info(f'Block spotted while driving at map ({bx:.2f}, {by:.2f}); stopping to approach it.')
+        self.scan_reach_pose = standoff_pose(self.scan_robot, (result.x, result.y), ARM_STANDOFF, ARM_BASE_OFFSET)
+        self.active_handle.cancel_goal_async()
+
     def failure_state(self, label):
         """Where to go when `label` failed. A failed idle drive goes back to idle. While visiting search poses, a
         failure before a block is in the gripper (drive, find or pick) skips to the next pose; anything else, such
         as the drop-off with a block in hand, stops the mission as before."""
         if label == 'navigate to clicked point':
             return State.IDLE
-        if self.searching and label in ('navigate to search pose', 'navigate to reach block', 'find', 'pick'):
+        if self.searching and label in ('navigate to search pose', 'navigate to reach block', 'navigate closer',
+                                       'find', 'pick'):
             self.get_logger().warn(f'{label} failed: skipping to the next search pose.')
             return State.NEXT_POSE
         return State.FAILED
@@ -520,6 +598,12 @@ class NavManager(Node):
         wrapped = future.result()
         self.active_handle = None
         if self.shutting_down:
+            return
+        if self.scan_reach_pose is not None and label == 'navigate to search pose':
+            self.reach_pose, self.scan_reach_pose = self.scan_reach_pose, None
+            self.reach_checked = False
+            self.state = State.NAV_TO_REACH
+            self.BUSY = False
             return
         if wrapped.status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info(f'{label}: succeeded')

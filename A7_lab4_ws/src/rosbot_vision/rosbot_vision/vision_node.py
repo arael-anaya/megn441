@@ -428,7 +428,7 @@ class VisionNode(Node):
         self.detectOnce(request, response)
         found = {b.color for b in response.blocks}
         missing = set(request.colors) - found if request.colors else (set() if found else set(HSV_RANGES))
-        if not missing or not self.raiseWhenMissing:
+        if not missing or not self.raiseWhenMissing or request.no_raise:
             return response
 
         self.get_logger().warn(f'Not seen: {sorted(missing)}. Backing up for a higher view of the floor.')

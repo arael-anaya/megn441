@@ -12,24 +12,25 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 PICK_IN_PLACE = True
-DRIVE_TO_BLOCK = False  # look first; if the block is out of the arm's reach, drive until it is in reach
-START_POSE = [-1.3965, 0.1878, -0.8135] #-1.3965
+DRIVE_TO_BLOCK = True  # look first; if the block is out of the arm's reach, drive until it is in reach
+START_POSE = [-.25, 0.3, -0.8135] #-1.3965
 START_POSE_ONE = True
 PICK_YAW = 0.0
 PLACE_YAW = 3.14
 
-PLACE_POSITION = [0.0, -0.2, 0.00]
+PLACE_POSITION = [0.0, 0.2, 0.00]
 
-FINAL_POSE = [5.4, -8.8, -0.869077]
+FINAL_POSE = [6, -8.7, -0.869077]
 FINAL_POSE_ONE = True
 END_AT_START_YAW = True
 
 # After the first block, visit these [x, y, yaw] map poses, pick a block at each and bring it to the drop-off.
 # Pose 2 is a ROUGH first guess (yaw = drop-off yaw + 90 deg); check it on the map before turning this on.
-USE_SEARCH_POSES = False
+USE_SEARCH_POSES = True
 SEARCH_POSES = [
-    [4.4, -8.8, FINAL_POSE[2] + math.pi / 2],
+    [4.4, -8.7, FINAL_POSE[2] - math.pi / 2],
 ]
+SCAN_WHILE_DRIVING = False  # with USE_SEARCH_POSES: arm in look pose while driving; stop when a block is seen
 PICK_COLORS = ['red', 'blue'] if USE_SEARCH_POSES else ['red']
 
 
@@ -99,6 +100,7 @@ def generate_launch_description():
             'finalPoseOne': ParameterValue(LaunchConfiguration('finalPoseOne'), value_type=bool),
             'start_pose': START_POSE,
             'startPoseOne': ParameterValue(LaunchConfiguration('startPoseOne'), value_type=bool),
+            'scan_while_driving': SCAN_WHILE_DRIVING and USE_SEARCH_POSES,
             **({'search_poses': [float(v) for pose in SEARCH_POSES for v in pose]} if USE_SEARCH_POSES else {}),
         }])
 

@@ -2,5 +2,7 @@ string[] colors
 # Height (m) of the underside of the blocks above the floor; 0 for blocks on the floor, level * block size for the
 # top block of a stack
 float64 height
+# True: never move the arm, even when a requested color is not seen (the default backs it up for a wider view)
+bool no_raise
 ---
 BlockDetection[] blocks
